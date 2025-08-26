@@ -1,0 +1,23 @@
+[
+  {
+    "name": "home",
+    "zone": "example.com",
+    "type": "A",
+    "ttl": 300,
+    "proxied": false
+  },
+  {
+    "name": "ipv6.home",
+    "zone": "example.com",
+    "type": "A",
+    "ttl": 1,
+    "proxied": false,
+    "_comment": "TTL of 1 turns on auto TTL - DELETE ME - 5 minute range"
+  },
+  {
+    "name": "vpn.example.net",
+    "type": "A",
+    "proxied": true,
+    "_comment": "If proxied, Cloudflare always set TTL to Auto (which is a 1) - DELETE ME - 5 minute range"
+  }
+]
