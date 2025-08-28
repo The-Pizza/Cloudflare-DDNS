@@ -48,7 +48,7 @@ data:
   # Where to fetch your current public IP (IPv4 endpoint)
   IPV4_ENDPOINT: "https://ipinfo.io/ip"
 
-  # Default TTL for created/updated DNS records.  1 for Auto.
+  # Default TTL for created/updated DNS records in seconds.  1 for Auto.
   DEFAULT_TTL: "1"
 
   # Default Cloudflare proxy setting (true/false)

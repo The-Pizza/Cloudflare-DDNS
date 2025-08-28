@@ -87,7 +87,6 @@ Notes:
 - `CF_API_URL` – Cloudflare API base URL (default: https://api.cloudflare.com/client/v4)
 - `CONFIG_PATH` – Path to records JSON (default: /etc/config/records.json)
 - `IP_POLL_INTERVAL_SECONDS` – Interval to poll IP endpoints (default: 60)
-- `CONFIG_RELOAD_INTERVAL_SECONDS` – Interval to reload JSON config (default: 300)
 - `CF_RESYNC_INTERVAL_SECONDS` – Interval to resync Cloudflare zones/cache (default: 3600)
 - `REQUEST_TIMEOUT_SECONDS` – HTTP timeout for requests (default: 10)
 - `IPV4_ENDPOINT` – IPv4 endpoint to detect public IP (default: https://ipinfo.io/ip)

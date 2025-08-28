@@ -26,7 +26,6 @@ CF_API_EMAIL = os.environ.get("CF_API_EMAIL")  # Required if using CF_API_KEY
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/etc/config/records.json")
 IP_POLL_INTERVAL_SECONDS = int(os.environ.get("IP_POLL_INTERVAL_SECONDS", "60"))
-CONFIG_RELOAD_INTERVAL_SECONDS = int(os.environ.get("CONFIG_RELOAD_INTERVAL_SECONDS", "300"))
 CF_RESYNC_INTERVAL_SECONDS = int(os.environ.get("CF_RESYNC_INTERVAL_SECONDS", "3600"))
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("REQUEST_TIMEOUT_SECONDS", "10"))
 
