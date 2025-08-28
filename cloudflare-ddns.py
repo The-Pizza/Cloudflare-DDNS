@@ -7,6 +7,15 @@ import ipaddress
 import requests
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    _WATCHDOG_OK = True
+except Exception:
+    Observer = None
+    FileSystemEventHandler = object
+    _WATCHDOG_OK = False
+
 # ----------------------------
 # Configuration via environment
 # ----------------------------
@@ -39,6 +48,28 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger("cf-updater")
+
+
+# ----------------------------
+# Watchdog for config file changes
+# ----------------------------
+class _ConfigChangeHandler(FileSystemEventHandler):
+    """Sets an event whenever CONFIG_PATH is changed (modify/move/create)."""
+    def __init__(self, watch_path: str, event):
+        self.watch_path = os.path.realpath(watch_path)
+        self.event = event
+    def _hit(self, p: str) -> bool:
+        try:
+            return os.path.realpath(p) == self.watch_path
+        except Exception:
+            return False
+    def on_modified(self, e): 
+        if self._hit(getattr(e, "src_path", "")): self.event.set()
+    def on_moved(self, e):
+        # if the target path becomes our file, or our file was replaced
+        if self._hit(getattr(e, "dest_path", "")) or self._hit(getattr(e, "src_path", "")): self.event.set()
+    def on_created(self, e):
+        if self._hit(getattr(e, "src_path", "")): self.event.set()
 
 
 # ----------------------------
@@ -285,215 +316,270 @@ def fetch_public_ipv4(endpoint: str) -> Optional[str]:
 # Main control loop
 # ----------------------------
 def main():
-    # Validate credentials early
     try:
-        cf = CloudflareClient(CF_API_URL, CF_API_TOKEN, CF_API_KEY, CF_API_EMAIL)
-    except Exception as e:
-        logger.error("Cloudflare credentials error: %s", e)
-        sys.exit(1)
+        # Validate credentials early
+        try:
+            cf = CloudflareClient(CF_API_URL, CF_API_TOKEN, CF_API_KEY, CF_API_EMAIL)
+        except Exception as e:
+            logger.error("Cloudflare credentials error: %s", e)
+            sys.exit(1)
 
-    logger.info("Starting Cloudflare DNS updater (IPv4-only; AAAA disabled)")
-    logger.info("Config path: %s", CONFIG_PATH)
+        logger.info("Starting Cloudflare DNS updater (IPv4-only; AAAA disabled)")
+        logger.info("Config path: %s", CONFIG_PATH)
 
-    records_cfg, raw_cfg = load_config(CONFIG_PATH)
-    logger.info("Loaded %d records from config", len(records_cfg))
+        records_cfg, raw_cfg = load_config(CONFIG_PATH)
+        logger.info("Loaded %d records from config", len(records_cfg))
 
-    # Next run trackers
-    now = time.monotonic()
-    next_config_reload = now + CONFIG_RELOAD_INTERVAL_SECONDS
-    next_cf_resync = now  # do an immediate resync to validate CF and block IP fetch until OK
-    next_ip_poll = now    # but will be skipped until CF OK
-
-    # State
-    cf_ok = False
-    zones_by_name: Dict[str, str] = {}
-    # local CF cache: key (name,'A') -> dict(record_id, content, ttl, proxied, zone_id)
-    cf_cache: Dict[Tuple[str, str], dict] = {}
-    current_ipv4: Optional[str] = None
-
-    while True:
-        loop_start = time.monotonic()
-
-        # 1) Reload config periodically
-        if loop_start >= next_config_reload:
+        # Next run trackers
+        now = time.monotonic()
+        next_cf_resync = now  # do an immediate resync to validate CF and block IP fetch until OK
+        next_ip_poll = now    # but will be skipped until CF OK
+        # --- Config change detection (watchdog if available; else mtime fallback) ---
+        reload_event = None
+        observer = None
+        last_cfg_mtime = None
+        if _WATCHDOG_OK:
             try:
-                records_cfg, raw_cfg = load_config(CONFIG_PATH)
-                logger.debug("Reloaded config: %d records", len(records_cfg))
-                next_cf_resync = loop_start
-            except SystemExit:
-                raise
+                import threading
+                reload_event = threading.Event()
+                handler = _ConfigChangeHandler(CONFIG_PATH, reload_event)
+                observer = Observer()
+                # Watch the parent directory so replace/atomic writes are detected
+                observer.schedule(handler, os.path.dirname(os.path.realpath(CONFIG_PATH)) or ".", recursive=False)
+                observer.start()
+                logger.info("Config watcher started for %s", CONFIG_PATH)
             except Exception as e:
-                logger.error("Unexpected error reloading config: %s", e)
-            next_config_reload = loop_start + CONFIG_RELOAD_INTERVAL_SECONDS
-
-        # 2) Cloudflare resync (and credential check)
-        if loop_start >= next_cf_resync:
+                logger.warning("File watcher unavailable (%s); falling back to mtime polling.", e)
+                observer = None
+                reload_event = None
+        if observer is None:
+            # Fallback: mtime poll (cheap; only triggers on actual change)
             try:
-                zones_by_name = cf.refresh_zones()
-                # Build/update cf_cache for all configured A records
-                new_cache: Dict[Tuple[str, str], dict] = {}
+                last_cfg_mtime = os.path.getmtime(CONFIG_PATH)
+            except Exception:
+                last_cfg_mtime = None
+
+        # Next run trackers (no periodic config reload anymore)
+
+
+        # State
+        cf_ok = False
+        zones_by_name: Dict[str, str] = {}
+        # local CF cache: key (name,'A') -> dict(record_id, content, ttl, proxied, zone_id)
+        cf_cache: Dict[Tuple[str, str], dict] = {}
+        current_ipv4: Optional[str] = None
+
+        while True:
+            loop_start = time.monotonic()
+
+            # 1) Config reload (event-driven via watchdog; mtime fallback otherwise)
+            try:
+                changed = False
+                if reload_event is not None:
+                    if reload_event.is_set():
+                        changed = True
+                        reload_event.clear()
+                else:
+                    # mtime fallback
+                    try:
+                        current_mtime = os.path.getmtime(CONFIG_PATH)
+                    except Exception:
+                        current_mtime = None
+                    if current_mtime != last_cfg_mtime:
+                        changed = True
+                        last_cfg_mtime = current_mtime
+
+                if changed:
+                    try:
+                        new_records_cfg, new_raw_cfg = load_config(CONFIG_PATH)
+                        records_cfg, raw_cfg = new_records_cfg, new_raw_cfg
+                        logger.info("Config changed on disk; reloaded %d records", len(records_cfg))
+                        # Force a CF resync so cache reflects any newly added/removed names immediately
+                        next_cf_resync = loop_start
+                    except SystemExit:
+                        raise
+                    except Exception as e:
+                        logger.error("Failed to reload config after change: %s", e)
+            except Exception as e:
+                logger.error("Config watch error: %s", e)
+
+            # 2) Cloudflare resync (and credential check)
+            if loop_start >= next_cf_resync:
+                try:
+                    zones_by_name = cf.refresh_zones()
+                    # Build/update cf_cache for all configured A records
+                    new_cache: Dict[Tuple[str, str], dict] = {}
+                    for rec in records_cfg:
+                        name = rec["name"]
+                        rtype = rec["type"].upper()  # already validated == 'A'
+                        proxied = rec.get("proxied", DEFAULT_PROXIED)
+                        ttl = 1 if proxied else rec.get("ttl", DEFAULT_TTL)
+                        zone_hint = rec.get("zone")
+
+                        fqdn = normalize_name(name, zone_hint)
+                        zone_sel = best_zone_for_name(zones_by_name, fqdn) if not zone_hint else (zone_hint.lower(), zones_by_name.get(zone_hint.lower()))
+                        if not zone_sel or not zone_sel[1]:
+                            logger.error("No matching Cloudflare zone found for record '%s' (type %s). Ensure zone exists and is in this account.", fqdn, rtype)
+                            continue
+                        zone_name, zone_id = zone_sel
+
+                        try:
+                            record = cf.get_dns_record(zone_id, fqdn, rtype)
+                            if record:
+                                new_cache[(fqdn, rtype)] = {
+                                    "record_id": record["id"],
+                                    "content": record["content"],
+                                    "ttl": record.get("ttl", ttl),
+                                    "proxied": record.get("proxied", proxied),
+                                    "zone_id": zone_id,
+                                    "zone_name": zone_name,
+                                }
+                            else:
+                                new_cache[(fqdn, rtype)] = {
+                                    "record_id": None,
+                                    "content": None,
+                                    "ttl": ttl,
+                                    "proxied": proxied,
+                                    "zone_id": zone_id,
+                                    "zone_name": zone_name,
+                                }
+                        except Exception as e:
+                            raise RuntimeError(f"Failed to query record {fqdn} {rtype}: {e}")
+                    
+                    # --- Diff vs previous cache and log any changes at INFO ---
+                    # Treat missing cf_cache as empty on first run
+                    prev_cache: Dict[Tuple[str, str], dict] = cf_cache or {}
+
+                    # 1) New or changed entries
+                    for key, new in new_cache.items():
+                        old = prev_cache.get(key)
+                        fqdn, rtype = key
+                        if not old:
+                            # Newly discovered since last resync
+                            if new["record_id"] and new["content"] is not None:
+                                logger.info("Discovered DNS %s %s now exists: %s (ttl=%s, proxied=%s) in zone %s",
+                                            fqdn, rtype, new['content'], new['ttl'], new['proxied'], new['zone_name'])
+                            else:
+                                logger.info("DNS %s %s not present in Cloudflare (will be created on reconcile) in zone %s",
+                                            fqdn, rtype, new['zone_name'])
+                            continue
+
+                        # Compare fields for changes
+                        changes = []
+                        for field in ("content", "ttl", "proxied", "record_id", "zone_id"):
+                            if old.get(field) != new.get(field):
+                                changes.append((field, old.get(field), new.get(field)))
+                        if changes:
+                            # Summarize most important changes first
+                            # Prefer content/ttl/proxied in the log line; include others compactly
+                            content_change = next(((o, n) for f, o, n in changes if f == "content"), None)
+                            ttl_change = next(((o, n) for f, o, n in changes if f == "ttl"), None)
+                            proxied_change = next(((o, n) for f, o, n in changes if f == "proxied"), None)
+                            extra = [(f, o, n) for f, o, n in changes if f not in ("content","ttl","proxied")]
+                            msg_bits = []
+                            if content_change: msg_bits.append(f"content {content_change[0]} -> {content_change[1]}")
+                            if ttl_change:     msg_bits.append(f"ttl {ttl_change[0]} -> {ttl_change[1]}")
+                            if proxied_change: msg_bits.append(f"proxied {proxied_change[0]} -> {proxied_change[1]}")
+                            for f, o, n in extra:
+                                msg_bits.append(f"{f} {o} -> {n}")
+                            logger.info("DNS %s %s changed: %s (zone %s)", fqdn, rtype, "; ".join(msg_bits), new["zone_name"])
+
+                    # 2) Removed entries (present before, absent now)
+                    removed_keys = set(prev_cache.keys()) - set(new_cache.keys())
+                    for fqdn, rtype in removed_keys:
+                        old = prev_cache[(fqdn, rtype)]
+                        logger.info("DNS %s %s disappeared from Cloudflare (was %s, ttl=%s, proxied=%s) in zone %s",
+                                    fqdn, rtype, old.get('content'), old.get('ttl'), old.get('proxied'), old.get('zone_name'))
+
+                    # Replace cache after diff/logging
+                    cf_cache = new_cache
+                    cf_ok = True
+                    logger.debug("Cloudflare resync complete. Cached %d entries.", len(cf_cache))
+                except Exception as e:
+                    logger.error("Cloudflare resync/login failed: %s", e)
+                    cf_ok = False
+                finally:
+                    next_cf_resync = loop_start + CF_RESYNC_INTERVAL_SECONDS
+
+            # 3) IP polling (only if CF is OK)
+            if cf_ok and loop_start >= next_ip_poll:
+                v4 = fetch_public_ipv4(IPV4_ENDPOINT)
+                if v4 is None:
+                    logger.warning("Public IPv4 not available this cycle; skipping record reconciliation.")
+                else:
+                    if current_ipv4 != v4:
+                        logger.info("Public IPv4 changed: %s -> %s", current_ipv4 or "(none)", v4)
+                    else:
+                        logger.debug("Public IPv4 unchanged: %s", v4)
+                    current_ipv4 = v4
+                next_ip_poll = loop_start + IP_POLL_INTERVAL_SECONDS
+
+            # 4) Reconcile desired state (only if CF OK and we have current IPv4)
+            if cf_ok and cf_cache and records_cfg and current_ipv4:
                 for rec in records_cfg:
+                    rtype = "A"  # enforced
                     name = rec["name"]
-                    rtype = rec["type"].upper()  # already validated == 'A'
                     proxied = rec.get("proxied", DEFAULT_PROXIED)
                     ttl = 1 if proxied else rec.get("ttl", DEFAULT_TTL)
                     zone_hint = rec.get("zone")
-
                     fqdn = normalize_name(name, zone_hint)
-                    zone_sel = best_zone_for_name(zones_by_name, fqdn) if not zone_hint else (zone_hint.lower(), zones_by_name.get(zone_hint.lower()))
-                    if not zone_sel or not zone_sel[1]:
-                        logger.error("No matching Cloudflare zone found for record '%s' (type %s). Ensure zone exists and is in this account.", fqdn, rtype)
+
+                    cache_key = (fqdn, rtype)
+                    entry = cf_cache.get(cache_key)
+                    if not entry:
+                        logger.debug("No cache entry for %s %s (zone missing or not in account).", fqdn, rtype)
                         continue
-                    zone_name, zone_id = zone_sel
+
+                    zone_id = entry["zone_id"]
+                    record_id = entry["record_id"]
+                    current_content = entry["content"]
 
                     try:
-                        record = cf.get_dns_record(zone_id, fqdn, rtype)
-                        if record:
-                            new_cache[(fqdn, rtype)] = {
-                                "record_id": record["id"],
-                                "content": record["content"],
-                                "ttl": record.get("ttl", ttl),
-                                "proxied": record.get("proxied", proxied),
+                        if record_id is None:
+                            created = cf.create_dns_record(zone_id, fqdn, rtype, current_ipv4, ttl, proxied)
+                            cf_cache[cache_key] = {
+                                "record_id": created["id"],
+                                "content": created["content"],
+                                "ttl": created.get("ttl", ttl),
+                                "proxied": created.get("proxied", proxied),
                                 "zone_id": zone_id,
-                                "zone_name": zone_name,
+                                "zone_name": entry.get("zone_name"),
                             }
+                            logger.info("Created DNS %s %s -> %s (ttl=%s proxied=%s)", rtype, fqdn, current_ipv4, ttl, proxied)
                         else:
-                            new_cache[(fqdn, rtype)] = {
-                                "record_id": None,
-                                "content": None,
-                                "ttl": ttl,
-                                "proxied": proxied,
-                                "zone_id": zone_id,
-                                "zone_name": zone_name,
-                            }
+                            if current_content != current_ipv4 or entry.get("ttl") != ttl or entry.get("proxied") != proxied:
+                                updated = cf.update_dns_record(zone_id, record_id, fqdn, rtype, current_ipv4, ttl, proxied)
+                                entry.update({
+                                    "content": updated["content"],
+                                    "ttl": updated.get("ttl", ttl),
+                                    "proxied": updated.get("proxied", proxied),
+                                })
+                                logger.info("Updated DNS %s %s: %s -> %s (ttl=%s proxied=%s)", rtype, fqdn, current_content, current_ipv4, ttl, proxied)
+                            else:
+                                logger.debug("No change for %s %s; current=%s", rtype, fqdn, current_content)
                     except Exception as e:
-                        raise RuntimeError(f"Failed to query record {fqdn} {rtype}: {e}")
-                
-                # --- Diff vs previous cache and log any changes at INFO ---
-                # Treat missing cf_cache as empty on first run
-                prev_cache: Dict[Tuple[str, str], dict] = cf_cache or {}
+                        msg = str(e)
+                        logger.error("Cloudflare update error for %s %s: %s", rtype, fqdn, msg)
+                        if "401" in msg or "403" in msg or "authentication" in msg.lower() or "unauthorized" in msg.lower():
+                            cf_ok = False
+                            logger.error("Marking Cloudflare status as not OK due to authentication/authorization error.")
 
-                # 1) New or changed entries
-                for key, new in new_cache.items():
-                    old = prev_cache.get(key)
-                    fqdn, rtype = key
-                    if not old:
-                        # Newly discovered since last resync
-                        if new["record_id"] and new["content"] is not None:
-                            logger.info("Discovered DNS %s %s now exists: %s (ttl=%s, proxied=%s) in zone %s",
-                                        fqdn, rtype, new['content'], new['ttl'], new['proxied'], new['zone_name'])
-                        else:
-                            logger.info("DNS %s %s not present in Cloudflare (will be created on reconcile) in zone %s",
-                                        fqdn, rtype, new['zone_name'])
-                        continue
-
-                    # Compare fields for changes
-                    changes = []
-                    for field in ("content", "ttl", "proxied", "record_id", "zone_id"):
-                        if old.get(field) != new.get(field):
-                            changes.append((field, old.get(field), new.get(field)))
-                    if changes:
-                        # Summarize most important changes first
-                        # Prefer content/ttl/proxied in the log line; include others compactly
-                        content_change = next(((o, n) for f, o, n in changes if f == "content"), None)
-                        ttl_change = next(((o, n) for f, o, n in changes if f == "ttl"), None)
-                        proxied_change = next(((o, n) for f, o, n in changes if f == "proxied"), None)
-                        extra = [(f, o, n) for f, o, n in changes if f not in ("content","ttl","proxied")]
-                        msg_bits = []
-                        if content_change: msg_bits.append(f"content {content_change[0]} -> {content_change[1]}")
-                        if ttl_change:     msg_bits.append(f"ttl {ttl_change[0]} -> {ttl_change[1]}")
-                        if proxied_change: msg_bits.append(f"proxied {proxied_change[0]} -> {proxied_change[1]}")
-                        for f, o, n in extra:
-                            msg_bits.append(f"{f} {o} -> {n}")
-                        logger.info("DNS %s %s changed: %s (zone %s)", fqdn, rtype, "; ".join(msg_bits), new["zone_name"])
-
-                # 2) Removed entries (present before, absent now)
-                removed_keys = set(prev_cache.keys()) - set(new_cache.keys())
-                for fqdn, rtype in removed_keys:
-                    old = prev_cache[(fqdn, rtype)]
-                    logger.info("DNS %s %s disappeared from Cloudflare (was %s, ttl=%s, proxied=%s) in zone %s",
-                                fqdn, rtype, old.get('content'), old.get('ttl'), old.get('proxied'), old.get('zone_name'))
-
-                # Replace cache after diff/logging
-                cf_cache = new_cache
-                cf_ok = True
-                logger.debug("Cloudflare resync complete. Cached %d entries.", len(cf_cache))
-            except Exception as e:
-                logger.error("Cloudflare resync/login failed: %s", e)
-                cf_ok = False
-            finally:
-                next_cf_resync = loop_start + CF_RESYNC_INTERVAL_SECONDS
-
-        # 3) IP polling (only if CF is OK)
-        if cf_ok and loop_start >= next_ip_poll:
-            v4 = fetch_public_ipv4(IPV4_ENDPOINT)
-            if v4 is None:
-                logger.warning("Public IPv4 not available this cycle; skipping record reconciliation.")
-            else:
-                if current_ipv4 != v4:
-                    logger.info("Public IPv4 changed: %s -> %s", current_ipv4 or "(none)", v4)
-                else:
-                    logger.debug("Public IPv4 unchanged: %s", v4)
-                current_ipv4 = v4
-            next_ip_poll = loop_start + IP_POLL_INTERVAL_SECONDS
-
-        # 4) Reconcile desired state (only if CF OK and we have current IPv4)
-        if cf_ok and cf_cache and records_cfg and current_ipv4:
-            for rec in records_cfg:
-                rtype = "A"  # enforced
-                name = rec["name"]
-                proxied = rec.get("proxied", DEFAULT_PROXIED)
-                ttl = 1 if proxied else rec.get("ttl", DEFAULT_TTL)
-                zone_hint = rec.get("zone")
-                fqdn = normalize_name(name, zone_hint)
-
-                cache_key = (fqdn, rtype)
-                entry = cf_cache.get(cache_key)
-                if not entry:
-                    logger.debug("No cache entry for %s %s (zone missing or not in account).", fqdn, rtype)
-                    continue
-
-                zone_id = entry["zone_id"]
-                record_id = entry["record_id"]
-                current_content = entry["content"]
-
-                try:
-                    if record_id is None:
-                        created = cf.create_dns_record(zone_id, fqdn, rtype, current_ipv4, ttl, proxied)
-                        cf_cache[cache_key] = {
-                            "record_id": created["id"],
-                            "content": created["content"],
-                            "ttl": created.get("ttl", ttl),
-                            "proxied": created.get("proxied", proxied),
-                            "zone_id": zone_id,
-                            "zone_name": entry.get("zone_name"),
-                        }
-                        logger.info("Created DNS %s %s -> %s (ttl=%s proxied=%s)", rtype, fqdn, current_ipv4, ttl, proxied)
-                    else:
-                        if current_content != current_ipv4 or entry.get("ttl") != ttl or entry.get("proxied") != proxied:
-                            updated = cf.update_dns_record(zone_id, record_id, fqdn, rtype, current_ipv4, ttl, proxied)
-                            entry.update({
-                                "content": updated["content"],
-                                "ttl": updated.get("ttl", ttl),
-                                "proxied": updated.get("proxied", proxied),
-                            })
-                            logger.info("Updated DNS %s %s: %s -> %s (ttl=%s proxied=%s)", rtype, fqdn, current_content, current_ipv4, ttl, proxied)
-                        else:
-                            logger.debug("No change for %s %s; current=%s", rtype, fqdn, current_content)
-                except Exception as e:
-                    msg = str(e)
-                    logger.error("Cloudflare update error for %s %s: %s", rtype, fqdn, msg)
-                    if "401" in msg or "403" in msg or "authentication" in msg.lower() or "unauthorized" in msg.lower():
-                        cf_ok = False
-                        logger.error("Marking Cloudflare status as not OK due to authentication/authorization error.")
-
-        # Sleep until next polling event
-        now = time.monotonic()
-        deadlines = [next_config_reload, next_cf_resync]
-        if cf_ok:
-            deadlines.append(next_ip_poll)
-        time.sleep(max(0.1, min(d - now for d in deadlines)))
-
+            # Sleep until next polling event
+            now = time.monotonic()
+            deadlines = [next_cf_resync]
+            if cf_ok:
+                deadlines.append(next_ip_poll)
+            time.sleep(max(0.1, min(d - now for d in deadlines)))
+    except KeyboardInterrupt:
+        raise
+    finally:
+        # Graceful watcher shutdown
+        try:
+            if 'observer' in locals() and observer:
+                observer.stop(); observer.join(timeout=2)
+                logger.info("Config watcher removed.")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     try:
