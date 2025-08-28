@@ -74,7 +74,7 @@ class CloudflareClient:
         return data
 
     def refresh_zones(self) -> Dict[str, str]:
-        logger.info("Refreshing Cloudflare zones list")
+        logger.debug("Refreshing Cloudflare zones list")
         zones: Dict[str, str] = {}
         page = 1
         per_page = 50
@@ -91,7 +91,7 @@ class CloudflareClient:
                 break
             page += 1
         self.zones_cache = zones
-        logger.info("Zones loaded: %s", ", ".join(sorted(zones.keys())) if zones else "(none)")
+        logger.debug("Zones loaded: %s", ", ".join(sorted(zones.keys())) if zones else "(none)")
         return zones
 
     def get_dns_record(self, zone_id: str, name: str, rtype: str) -> Optional[dict]:
@@ -318,7 +318,7 @@ def main():
         if loop_start >= next_config_reload:
             try:
                 records_cfg, raw_cfg = load_config(CONFIG_PATH)
-                logger.info("Reloaded config: %d records", len(records_cfg))
+                logger.debug("Reloaded config: %d records", len(records_cfg))
                 next_cf_resync = loop_start
             except SystemExit:
                 raise
@@ -368,9 +368,56 @@ def main():
                             }
                     except Exception as e:
                         raise RuntimeError(f"Failed to query record {fqdn} {rtype}: {e}")
+                
+                # --- Diff vs previous cache and log any changes at INFO ---
+                # Treat missing cf_cache as empty on first run
+                prev_cache: Dict[Tuple[str, str], dict] = cf_cache or {}
+
+                # 1) New or changed entries
+                for key, new in new_cache.items():
+                    old = prev_cache.get(key)
+                    fqdn, rtype = key
+                    if not old:
+                        # Newly discovered since last resync
+                        if new["record_id"] and new["content"] is not None:
+                            logger.info("Discovered DNS %s %s now exists: %s (ttl=%s, proxied=%s) in zone %s",
+                                        fqdn, rtype, new['content'], new['ttl'], new['proxied'], new['zone_name'])
+                        else:
+                            logger.info("DNS %s %s not present in Cloudflare (will be created on reconcile) in zone %s",
+                                        fqdn, rtype, new['zone_name'])
+                        continue
+
+                    # Compare fields for changes
+                    changes = []
+                    for field in ("content", "ttl", "proxied", "record_id", "zone_id"):
+                        if old.get(field) != new.get(field):
+                            changes.append((field, old.get(field), new.get(field)))
+                    if changes:
+                        # Summarize most important changes first
+                        # Prefer content/ttl/proxied in the log line; include others compactly
+                        content_change = next(((o, n) for f, o, n in changes if f == "content"), None)
+                        ttl_change = next(((o, n) for f, o, n in changes if f == "ttl"), None)
+                        proxied_change = next(((o, n) for f, o, n in changes if f == "proxied"), None)
+                        extra = [(f, o, n) for f, o, n in changes if f not in ("content","ttl","proxied")]
+                        msg_bits = []
+                        if content_change: msg_bits.append(f"content {content_change[0]} -> {content_change[1]}")
+                        if ttl_change:     msg_bits.append(f"ttl {ttl_change[0]} -> {ttl_change[1]}")
+                        if proxied_change: msg_bits.append(f"proxied {proxied_change[0]} -> {proxied_change[1]}")
+                        for f, o, n in extra:
+                            msg_bits.append(f"{f} {o} -> {n}")
+                        logger.info("DNS %s %s changed: %s (zone %s)", fqdn, rtype, "; ".join(msg_bits), new["zone_name"])
+
+                # 2) Removed entries (present before, absent now)
+                removed_keys = set(prev_cache.keys()) - set(new_cache.keys())
+                for fqdn, rtype in removed_keys:
+                    old = prev_cache[(fqdn, rtype)]
+                    logger.info("DNS %s %s disappeared from Cloudflare (was %s, ttl=%s, proxied=%s) in zone %s",
+                                fqdn, rtype, old.get('content'), old.get('ttl'), old.get('proxied'), old.get('zone_name'))
+
+                # Replace cache after diff/logging
                 cf_cache = new_cache
                 cf_ok = True
-                logger.info("Cloudflare resync complete. Cached %d entries.", len(cf_cache))
+                logger.debug("Cloudflare resync complete. Cached %d entries.", len(cf_cache))
             except Exception as e:
                 logger.error("Cloudflare resync/login failed: %s", e)
                 cf_ok = False
