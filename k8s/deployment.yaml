@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: cloudflare-ddns
-          image: ghcr.io/the-pizza/cloudflare-ddns:0.3.0
+          image: ghcr.io/the-pizza/cloudflare-ddns:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -52,13 +52,14 @@ spec:
             httpGet:
               path: /health/live
               port: 8080
-            initialDelaySeconds: 15
+            initialDelaySeconds: 30
             periodSeconds: 30
+            failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 8080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 10
       volumes:
         - name: records
