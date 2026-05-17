@@ -81,29 +81,49 @@ async function loadRecords() {
     tbody.innerHTML = '';
     rows.forEach(rec => {
       const tr = document.createElement('tr');
-      tr.className = rec.exists_in_cf ? '' : 'bg-amber-500/5';
+      if (rec.is_tunnel) {
+        tr.className = 'bg-orange-500/5';
+      } else if (!rec.exists_in_cf) {
+        tr.className = 'bg-amber-500/5';
+      }
       let manage;
-      if (rec.exists_in_cf) {
+      if (rec.is_tunnel) {
+        manage = `<span class="text-zinc-600 text-xs" title="${rec.ignore_reason || 'Ignored'}">⛔ ignored</span>`;
+      } else if (rec.exists_in_cf) {
         manage = `<input type="checkbox" ${rec.enabled ? 'checked' : ''} class="accent-emerald-500" onchange="toggleRow(this, '${rec.id}')"/>`;
       } else {
         manage = `<button class="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500"
                           onclick="createFromDiscovered('${rec.name}')">Create</button>`;
       }
       let proxied;
-      if (rec.exists_in_cf) {
+      if (rec.is_tunnel) {
+        proxied = `<span title="Cloudflare Tunnel — always proxied">☁️</span>`;
+      } else if (rec.exists_in_cf) {
         const icon = rec.proxied ? '☁️' : '○';
         proxied = `<button onclick="toggleProxied('${rec.id}', ${rec.proxied})" class="hover:opacity-70" title="${rec.proxied ? 'Proxied — click to make direct' : 'Direct — click to proxy'}">${icon}</button>`;
       } else {
         proxied = `<span class="text-zinc-600">—</span>`;
       }
+      let typeBadge;
+      if (rec.type === 'Tunnel') {
+        typeBadge = `<span class="px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 text-xs" title="Cloudflare Tunnel CNAME (cloudflared)">🚇 Tunnel</span>`;
+      } else {
+        typeBadge = `<span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${rec.type}</span>`;
+      }
       const sourceBadge = rec.source
         ? `<span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${rec.source}</span>`
         : '<span class="text-zinc-600 text-xs">—</span>';
+      const nameSuffix = rec.is_tunnel
+        ? ''
+        : (rec.exists_in_cf ? '' : ' <span class="text-amber-400 text-xs ml-1">(no CF record)</span>');
+      const valueCell = rec.is_tunnel
+        ? `<span class="font-mono text-zinc-400 italic">${rec.content || '—'}</span>`
+        : `<span class="font-mono text-zinc-400">${rec.content || '—'}</span>`;
       tr.innerHTML = `
         <td class="px-4 py-2">${manage}</td>
-        <td class="px-4 py-2 font-mono">${rec.name}${rec.exists_in_cf ? '' : ' <span class="text-amber-400 text-xs ml-1">(no CF record)</span>'}</td>
-        <td class="px-4 py-2"><span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${rec.type}</span></td>
-        <td class="px-4 py-2 font-mono text-zinc-400">${rec.content || '—'}</td>
+        <td class="px-4 py-2 font-mono">${rec.name}${nameSuffix}</td>
+        <td class="px-4 py-2">${typeBadge}</td>
+        <td class="px-4 py-2">${valueCell}</td>
         <td class="px-4 py-2">${proxied}</td>
         <td class="px-4 py-2 text-xs text-zinc-400">${sourceBadge}</td>`;
       tbody.appendChild(tr);

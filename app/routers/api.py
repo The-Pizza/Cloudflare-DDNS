@@ -33,10 +33,18 @@ def _host_in_zone(host: str, zone_name: str) -> bool:
     return host == zone_name or host.endswith("." + zone_name)
 
 
+def _is_tunnel_cname(rec: dict) -> bool:
+    """Cloudflare Tunnel public hostnames are CNAMEs to <uuid>.cfargotunnel.com."""
+    if rec.get("type") != "CNAME":
+        return False
+    content = (rec.get("content") or "").lower().rstrip(".")
+    return content.endswith(".cfargotunnel.com") or content == "cfargotunnel.com"
+
+
 @router.get("/zones/{zone_id}/records")
 async def list_records(zone_id: str):
-    """Return both real CF records AND discovered hosts whose name belongs to this zone
-    but don't yet have a Cloudflare A/AAAA record."""
+    """Return CF A/AAAA records, Cloudflare Tunnel CNAMEs (read-only), AND
+    discovered hosts in this zone that lack any matching CF record."""
     cf = _cf()
     cf_records = await cf.list_dns_records(zone_id)
     zones = await cf.list_zones()
@@ -56,34 +64,57 @@ async def list_records(zone_id: str):
         sess.close()
 
     out: List[dict] = []
+    # Track every CF name we've surfaced (A/AAAA/Tunnel) so we don't double-list
+    # a discovered host that's already DNS-managed (incl. via tunnel CNAMEs).
     cf_names_seen = set()
+
     for r in cf_records:
-        if r["type"] not in ("A", "AAAA"):
+        rtype = r["type"]
+        is_tunnel = _is_tunnel_cname(r)
+        if rtype not in ("A", "AAAA") and not is_tunnel:
             continue
         cf_names_seen.add(r["name"])
         m = managed.get(r["id"])
-        # If the user hasn't toggled this on, but discovery has seen the hostname,
-        # tag the source as the discovery source so the user understands where
-        # it came from.
         discovered_match = next((d for d in discovered if d.host == r["name"]), None)
         source = (
             m.source if m else (discovered_match.source if discovered_match else None)
         )
+        if is_tunnel:
+            # Tunnel CNAMEs are managed by cloudflared — surface as read-only.
+            out.append({
+                "id": r["id"],
+                "name": r["name"],
+                "type": "Tunnel",
+                "content": r.get("content"),
+                "proxied": r.get("proxied", True),
+                "ttl": r.get("ttl", 1),
+                "enabled": False,
+                "source": source,
+                "exists_in_cf": True,
+                "is_tunnel": True,
+                "ignored": True,
+                "ignore_reason": "Managed by Cloudflare Tunnel (cloudflared)",
+                "last_ip": None,
+                "last_updated": None,
+            })
+            continue
         out.append({
             "id": r["id"],
             "name": r["name"],
-            "type": r["type"],
+            "type": rtype,
             "content": r.get("content"),
             "proxied": r.get("proxied", False),
             "ttl": r.get("ttl", 1),
             "enabled": bool(m and m.enabled),
             "source": source,
             "exists_in_cf": True,
+            "is_tunnel": False,
+            "ignored": False,
             "last_ip": m.last_ip if m else None,
             "last_updated": m.last_updated.isoformat() if m and m.last_updated else None,
         })
 
-    # Discovered hosts in this zone that have NO matching CF record yet
+    # Discovered hosts in this zone with no matching CF record of ANY surfaced type
     for d in discovered:
         if not _host_in_zone(d.host, zone_name):
             continue
@@ -99,6 +130,8 @@ async def list_records(zone_id: str):
             "enabled": False,
             "source": d.source,
             "exists_in_cf": False,
+            "is_tunnel": False,
+            "ignored": False,
             "namespace": d.namespace,
             "resource_name": d.resource_name,
         })

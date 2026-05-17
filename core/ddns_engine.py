@@ -183,6 +183,10 @@ class DDNSEngine:
                     result["errors"] += 1
                     log.warning("verify: record %s not in CF anymore", rec.record_name)
                     continue
+                # Defensive: never touch tunnel CNAMEs (cloudflared owns them)
+                if cf_rec.get("type") == "CNAME" and (cf_rec.get("content") or "").lower().rstrip(".").endswith(".cfargotunnel.com"):
+                    result["in_sync"] += 1
+                    continue
                 desired_drift = (
                     cf_rec.get("content") != ip
                     or bool(cf_rec.get("proxied")) != bool(rec.proxied)
