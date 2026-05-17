@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ddns-witschger-home
+  namespace: cloudflare-ddns
+spec:
+  secretName: ddns-witschger-home-tls
+  issuerRef:
+    name: localca
+    kind: ClusterIssuer
+  dnsNames:
+    - ddns.witschger.home

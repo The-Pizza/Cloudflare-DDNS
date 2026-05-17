@@ -15,4 +15,4 @@ spec:
         - name: cloudflare-ddns
           port: 8080
   tls:
-    secretName: witschger-home-tls
+    secretName: ddns-witschger-home-tls
