@@ -85,10 +85,12 @@ def _signer() -> TimestampSigner:
 
 
 def _set_session_cookie(response, username: str, email: str = "", groups: Iterable[str] = ()):
-    """Store username|email|groups in a signed cookie."""
+    """Store username|email|groups in a signed cookie (base64 payload to avoid control-char issues)."""
+    import base64, json as _json
     cookie_name = str(get_effective("session_cookie_name") or "cfddns_session")
-    sep = "\x1f"  # ASCII unit separator
-    payload = sep.join([username, email, ",".join(groups)])
+    payload = base64.urlsafe_b64encode(
+        _json.dumps({"u": username, "e": email, "g": list(groups)}).encode()
+    ).decode().rstrip("=")
     token = _signer().sign(payload.encode()).decode()
     max_age = int(get_effective("session_max_age_seconds") or 28800)
     response.set_cookie(
@@ -98,21 +100,22 @@ def _set_session_cookie(response, username: str, email: str = "", groups: Iterab
 
 
 def _read_session_cookie(request: Request) -> Optional[Tuple[str, str, list]]:
+    import base64, json as _json
     cookie_name = str(get_effective("session_cookie_name") or "cfddns_session")
     raw = request.cookies.get(cookie_name)
     if not raw:
         return None
     max_age = int(get_effective("session_max_age_seconds") or 28800)
     try:
-        payload = _signer().unsign(raw, max_age=max_age).decode()
+        payload_b64 = _signer().unsign(raw, max_age=max_age).decode()
     except BadSignature:
         return None
-    parts = payload.split("\x1f")
-    while len(parts) < 3:
-        parts.append("")
-    username, email, groups_csv = parts[0], parts[1], parts[2]
-    groups = [g for g in groups_csv.split(",") if g]
-    return username, email, groups
+    try:
+        pad = "=" * (-len(payload_b64) % 4)
+        data = _json.loads(base64.urlsafe_b64decode(payload_b64 + pad).decode())
+    except Exception:
+        return None
+    return str(data.get("u", "")), str(data.get("e", "")), [str(g) for g in data.get("g", [])]
 
 
 # ---------------------------------------------------------------------------

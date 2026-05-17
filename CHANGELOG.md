@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-05-17
+
+### Fixed
+- Session cookie payload now uses base64-encoded JSON instead of an
+  ASCII Unit Separator (`\\x1f`). `http.cookies` rejects control chars in
+  cookie values, so the prior format raised
+  `CookieError: Control characters are not allowed in cookies` on the
+  OIDC callback and returned 500 to the browser.
+
 ## [0.5.1] - 2026-05-17
 
 ### Fixed
