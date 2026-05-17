@@ -1,4 +1,6 @@
-# Standard Ingress -- works on any controller. Default class is `traefik` (internal).
+# Standard Ingress on traefik-internal.
+# TLS cert is auto-managed by cert-manager via the cluster-issuer annotation
+# (see Certificate object auto-created in cert-manager logs).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,7 +9,7 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: localca
 spec:
-  ingressClassName: traefik
+  ingressClassName: traefik-internal
   rules:
     - host: ddns.witschger.home
       http:
