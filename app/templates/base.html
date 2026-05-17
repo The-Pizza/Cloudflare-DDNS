@@ -21,6 +21,7 @@
       <a href="/" class="hover:text-white">Zones</a>
       <a href="/discovered" class="hover:text-white">Discovered</a>
       <a href="/settings" class="hover:text-white">Settings</a>
+      <span id="nav-auth" class="text-zinc-400"></span>
     </nav>
   </div>
 </header>
@@ -35,6 +36,15 @@
 <script>
   fetch('/api/status').then(r => r.json()).then(s => {
     if (s && s.version) document.getElementById('footer-version').textContent = 'cloudflare-ddns v' + s.version;
+  }).catch(() => {});
+  fetch('/auth/whoami').then(r => r.json()).then(w => {
+    const el = document.getElementById('nav-auth');
+    if (!el) return;
+    if (w.user) {
+      el.innerHTML = `· <span class="font-mono">${w.user.username}</span> <a href="/auth/logout" class="hover:text-white underline">sign out</a>`;
+    } else if (w.auth_mode === 'oidc') {
+      el.innerHTML = `· <a href="/auth/login" class="hover:text-white underline">sign in</a>`;
+    }
   }).catch(() => {});
 </script>
 </body>

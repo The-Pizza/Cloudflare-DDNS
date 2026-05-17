@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-05-17
+
+### Added
+- **Built-in OpenID Connect login** (`auth_mode=oidc`). Authorization Code
+  flow with PKCE against any OIDC provider via discovery
+  (`<issuer>/.well-known/openid-configuration`). Verified shape works
+  with Authentik, Keycloak, Authelia, Dex, Zitadel, Google, Okta.
+  Settings: `oidc_issuer`, `oidc_client_id`, `oidc_client_secret`,
+  `oidc_scopes`, `oidc_redirect_url`, `oidc_username_claim`,
+  `oidc_email_claim`, `oidc_groups_claim`, `oidc_allowed_groups`,
+  `oidc_allowed_emails`.
+- **Forward-auth mode** (`auth_mode=forward-auth`) for users who put
+  Authentik / Authelia / oauth2-proxy in front via Traefik or nginx.
+  Configurable identity headers (`forward_auth_user_header`,
+  `forward_auth_email_header`, `forward_auth_groups_header`,
+  `forward_auth_groups_separator`); defaults match Authentik.
+- `/auth/login`, `/auth/callback`, `/auth/logout`, `/auth/whoami`
+  endpoints.
+- Signed-session cookie (itsdangerous) with auto-generated
+  `session_secret` (persisted across restarts).
+- Group/email allow-lists enforced for both auth modes.
+- Settings page now groups fields (Cloudflare / DDNS engine / Discovery
+  / Authentication / OIDC client / Forward-auth headers) and shows a
+  signed-in banner + sign-out link.
+- Top-nav shows `· username · sign out` when authenticated, `· sign in`
+  in oidc mode when not.
+
+### Notes
+- `none` remains the default — the container is open out of the box,
+  exactly as before.
+- Probes (`/health/*`) and `/api/status` are always reachable so k8s
+  liveness/readiness and the footer version banner keep working.
+
 ## [0.4.1] - 2026-05-17
 
 ### Added

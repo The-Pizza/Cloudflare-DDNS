@@ -40,8 +40,41 @@ class Settings(BaseSettings):
     config_path: str = "/etc/config/records.json"
     import_legacy_config: bool = True
 
-    # ---- Auth (advisory — actual enforcement is via reverse-proxy / Authentik forward-auth) ----
-    auth_mode: str = "none"           # none | forward-auth
+    # ---- Auth ----
+    # auth_mode: none | oidc | forward-auth
+    #   none         → app is fully open (default; matches existing behavior)
+    #   oidc         → built-in OIDC/OAuth2 Authorization Code flow handled by the app itself
+    #   forward-auth → app trusts a reverse-proxy (Traefik/nginx + Authentik/Authelia/oauth2-proxy)
+    #                  to perform authn and forward identity headers
+    auth_mode: str = "none"
+
+    # ---- Built-in OIDC client (auth_mode=oidc) ----
+    # Discovery: oidc_issuer/.well-known/openid-configuration. Standard params apply
+    # to ANY OIDC provider — Authentik, Keycloak, Authelia, Google, Okta, Dex, Zitadel, etc.
+    oidc_issuer: str = ""              # e.g. https://auth.example.com/application/o/cloudflare-ddns/
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_scopes: str = "openid profile email groups"
+    oidc_redirect_url: str = ""        # if blank, computed from request: <scheme>://<host>/auth/callback
+    oidc_username_claim: str = "preferred_username"
+    oidc_email_claim: str = "email"
+    oidc_groups_claim: str = "groups"
+    # Comma-separated; user must be in at least one to enter. Empty = any authenticated user.
+    oidc_allowed_groups: str = ""
+    oidc_allowed_emails: str = ""      # comma-separated allow-list of full emails (optional)
+    # Random string for signing the session cookie. Auto-generated on startup if blank.
+    session_secret: str = ""
+    session_cookie_name: str = "cfddns_session"
+    session_max_age_seconds: int = 60 * 60 * 8        # 8h
+
+    # ---- Forward-auth (auth_mode=forward-auth) ----
+    # The reverse proxy is trusted to set these headers after authenticating the user.
+    # Authentik defaults: X-authentik-username / X-authentik-email / X-authentik-groups.
+    # oauth2-proxy defaults: X-Forwarded-User / X-Forwarded-Email / X-Forwarded-Groups.
+    forward_auth_user_header: str = "X-authentik-username"
+    forward_auth_email_header: str = "X-authentik-email"
+    forward_auth_groups_header: str = "X-authentik-groups"
+    forward_auth_groups_separator: str = "|"
 
     # ---- HTTP server ----
     log_level: str = "INFO"
@@ -58,8 +91,25 @@ RUNTIME_SETTINGS_KEYS = (
     "default_proxied",
     "default_ttl",
     "annotation_key",
+    # Auth
     "auth_mode",
+    "oidc_issuer",
+    "oidc_client_id",
+    "oidc_client_secret",
+    "oidc_scopes",
+    "oidc_redirect_url",
+    "oidc_username_claim",
+    "oidc_email_claim",
+    "oidc_groups_claim",
+    "oidc_allowed_groups",
+    "oidc_allowed_emails",
+    "forward_auth_user_header",
+    "forward_auth_email_header",
+    "forward_auth_groups_header",
+    "forward_auth_groups_separator",
 )
+
+SECRET_KEYS = {"cf_api_token", "oidc_client_secret", "session_secret"}
 
 
 def env_locked() -> Set[str]:
