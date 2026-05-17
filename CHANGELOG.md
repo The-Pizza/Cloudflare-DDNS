@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-05-17
+
+### Fixed
+- `/auth/whoami` reads the session cookie / forward-auth headers
+  directly when called from the always-allow path, so signed-in users
+  no longer see a 'sign in' link in the nav.
+- Zone records table: switched to `table-fixed` with explicit column
+  widths, badges are `whitespace-nowrap` (Source column no longer wraps
+  to two lines), long tunnel CNAMEs truncate with a tooltip instead of
+  pushing the layout, all cells share consistent vertical padding.
+
+### Changed
+- Settings page only renders the OIDC client section when
+  `auth_mode=oidc` and the Forward-auth headers section when
+  `auth_mode=forward-auth`. Changing the dropdown auto-saves and
+  re-renders.
+
 ## [0.5.2] - 2026-05-17
 
 ### Fixed

@@ -82,6 +82,8 @@ async function loadSettings() {
     const r = await fetch('/api/settings');
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
+    // Determine current auth_mode for conditional sections
+    const currentMode = String(data.auth_mode ? data.auth_mode.value : 'none').toLowerCase();
     container.innerHTML = '';
     // Group rows by FIELD_META.group
     const byGroup = {};
@@ -90,8 +92,15 @@ async function loadSettings() {
       (byGroup[meta.group || 'Other'] = byGroup[meta.group || 'Other'] || []).push([key, info, meta]);
     }
     const groupOrder = ['Cloudflare', 'DDNS engine', 'Discovery', 'Authentication', 'OIDC client', 'Forward-auth headers', 'Other'];
+    // Conditional visibility: only show OIDC fields when mode=oidc, forward-auth when mode=forward-auth.
+    const isVisible = (group) => {
+      if (group === 'OIDC client') return currentMode === 'oidc';
+      if (group === 'Forward-auth headers') return currentMode === 'forward-auth';
+      return true;
+    };
     for (const group of groupOrder) {
       if (!byGroup[group]) continue;
+      if (!isVisible(group)) continue;
       const header = document.createElement('div');
       header.className = 'px-6 py-3 bg-zinc-950/50 border-b border-zinc-800 text-xs uppercase tracking-wider text-zinc-400 font-semibold';
       header.textContent = group;
@@ -104,7 +113,7 @@ async function loadSettings() {
         if (meta.type === 'bool') {
           input = `<input type="checkbox" id="f-${key}" ${(info.value === true || info.value === 'True' || info.value === 'true') ? 'checked' : ''} ${locked ? 'disabled' : ''} class="accent-emerald-500 h-5 w-5"/>`;
         } else if (meta.type === 'select') {
-          input = `<select id="f-${key}" ${locked ? 'disabled' : ''} class="bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm w-full ${locked ? 'opacity-50' : ''}">
+          input = `<select id="f-${key}" ${locked ? 'disabled' : ''} ${key === 'auth_mode' ? 'onchange="onAuthModeChange(this)"' : ''} class="bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm w-full ${locked ? 'opacity-50' : ''}">
             ${meta.options.map(o => `<option ${String(info.value) === o ? 'selected' : ''}>${o}</option>`).join('')}
           </select>`;
         } else {
@@ -129,6 +138,24 @@ async function loadSettings() {
     }
   } catch (e) {
     container.innerHTML = `<div class="p-6 text-red-400 text-sm">Failed: ${e.message}</div>`;
+  }
+}
+
+// When the auth_mode dropdown changes, save it AND re-render so the
+// matching section appears/disappears immediately. The user no longer
+// has to hit "Save" separately for the visibility change to apply.
+async function onAuthModeChange(sel) {
+  const value = sel.value;
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key: 'auth_mode', value}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast(`Auth mode → ${value}`);
+    loadSettings();
+  } catch (e) {
+    showToast('Auth mode change failed: ' + e.message, 'red');
   }
 }
 

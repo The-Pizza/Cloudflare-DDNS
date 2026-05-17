@@ -362,6 +362,28 @@ async def auth_logout(request: Request):
 
 @router.get("/auth/whoami")
 async def auth_whoami(request: Request):
-    user = getattr(request.state, "user", None)
+    """Public endpoint (allow-listed) — read identity directly from cookie/headers
+    so the UI can show 'signed in as …' without forcing this through the
+    auth-required path. Falls back to whatever AuthMiddleware put on
+    request.state for parity with protected routes."""
     mode = str(get_effective("auth_mode") or "none").lower()
+    user = getattr(request.state, "user", None)
+    if user is None and mode == "oidc":
+        sess = _read_session_cookie(request)
+        if sess:
+            username, email, groups = sess
+            user = {"username": username, "email": email, "groups": groups, "mode": "oidc"}
+    if user is None and mode == "forward-auth":
+        user_h = str(get_effective("forward_auth_user_header") or "X-authentik-username")
+        email_h = str(get_effective("forward_auth_email_header") or "X-authentik-email")
+        groups_h = str(get_effective("forward_auth_groups_header") or "X-authentik-groups")
+        sep = str(get_effective("forward_auth_groups_separator") or "|")
+        un = request.headers.get(user_h)
+        if un:
+            user = {
+                "username": un,
+                "email": request.headers.get(email_h, ""),
+                "groups": [g.strip() for g in request.headers.get(groups_h, "").split(sep) if g.strip()],
+                "mode": "forward-auth",
+            }
     return {"auth_mode": mode, "user": user}
