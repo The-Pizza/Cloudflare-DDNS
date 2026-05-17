@@ -27,7 +27,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: cloudflare-ddns
-          image: ghcr.io/the-pizza/cloudflare-ddns:0.5.4
+          image: ghcr.io/the-pizza/cloudflare-ddns:0.6.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

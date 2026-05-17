@@ -16,7 +16,7 @@ import httpx
 from core.cloudflare_client import CloudflareClient
 from core.config import settings
 from core.database import get_session
-from core.models import ManagedRecord
+from core.models import IpHistoryEntry, ManagedRecord
 
 log = logging.getLogger("cfddns.engine")
 
@@ -27,6 +27,19 @@ class DDNSEngine:
         self.current_ip: Optional[str] = None
         self.last_update: Optional[datetime] = None
         self.last_error: Optional[str] = None
+
+    def _record_ip_change(self, previous_ip: Optional[str], new_ip: str, note: str) -> None:
+        """Persist an IP transition to the history table. Best-effort — never
+        let history bookkeeping break the DDNS loop."""
+        try:
+            sess = get_session()
+            try:
+                sess.add(IpHistoryEntry(previous_ip=previous_ip or None, new_ip=new_ip, note=note))
+                sess.commit()
+            finally:
+                sess.close()
+        except Exception as e:
+            log.warning("Failed to record IP history (%s -> %s): %s", previous_ip, new_ip, e)
 
     async def get_current_ip(self) -> Optional[str]:
         try:
@@ -115,6 +128,7 @@ class DDNSEngine:
 
         if ip != self.current_ip:
             log.info("Public IPv4 changed: %s -> %s", self.current_ip, ip)
+            self._record_ip_change(self.current_ip, ip, "ip-change" if self.current_ip else "boot")
             self.current_ip = ip
 
         sess = get_session()

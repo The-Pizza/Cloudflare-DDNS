@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from core.cloudflare_client import CloudflareClient
 from core.config import RUNTIME_SETTINGS_KEYS, SECRET_KEYS, env_locked, get_effective, settings
 from core.database import get_session
-from core.models import DiscoveredHost, ManagedRecord, Setting
+from core.models import DiscoveredHost, IpHistoryEntry, ManagedRecord, Setting
 
 log = logging.getLogger("cfddns.api")
 router = APIRouter()
@@ -290,6 +290,32 @@ async def discovered():
                 "namespace": r.namespace,
                 "resource_name": r.resource_name,
                 "first_seen": r.first_seen.isoformat() if r.first_seen else None,
+            }
+            for r in rows
+        ]
+    finally:
+        sess.close()
+
+
+# ---- IP history ----
+
+@router.get("/ip-history")
+async def ip_history(limit: int = 100):
+    sess = get_session()
+    try:
+        rows = (
+            sess.query(IpHistoryEntry)
+            .order_by(IpHistoryEntry.changed_at.desc())
+            .limit(max(1, min(limit, 1000)))
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "previous_ip": r.previous_ip,
+                "new_ip": r.new_ip,
+                "changed_at": r.changed_at.isoformat() if r.changed_at else None,
+                "note": r.note,
             }
             for r in rows
         ]

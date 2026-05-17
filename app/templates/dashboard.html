@@ -2,10 +2,15 @@
 {% block title %}Dashboard – Cloudflare DDNS{% endblock %}
 {% block content %}
 <section class="grid md:grid-cols-3 gap-6 mb-8">
-  <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-    <div class="text-zinc-400 text-sm">Current Public IP</div>
+  <button type="button" onclick="openIpHistory()"
+          class="text-left bg-zinc-900 border border-zinc-800 rounded-2xl p-5 hover:border-zinc-700 hover:bg-zinc-900/80 transition focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+          title="Click to view IP change history">
+    <div class="flex items-center justify-between">
+      <div class="text-zinc-400 text-sm">Current Public IP</div>
+      <span class="text-xs text-zinc-500">📜 history</span>
+    </div>
     <div id="current-ip" class="mt-2 font-mono text-xl">—</div>
-  </div>
+  </button>
   <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
     <div class="text-zinc-400 text-sm">Last Update</div>
     <div id="last-update" class="mt-2 font-mono text-base">—</div>
@@ -15,6 +20,24 @@
     <div id="counts" class="mt-2 font-mono text-xl">0 / 0</div>
   </div>
 </section>
+
+<!-- IP history modal -->
+<div id="ip-history-modal"
+     class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+     onclick="if (event.target === this) closeIpHistory()">
+  <div class="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+      <div>
+        <h2 class="text-lg font-semibold">📜 Public IP history</h2>
+        <p class="text-xs text-zinc-500 mt-0.5">Every detected transition. Newest first.</p>
+      </div>
+      <button onclick="closeIpHistory()" class="text-zinc-400 hover:text-white text-lg leading-none">✕</button>
+    </div>
+    <div id="ip-history-body" class="overflow-y-auto flex-1">
+      <div class="p-6 text-zinc-500 text-sm">Loading…</div>
+    </div>
+  </div>
+</div>
 
 <section class="bg-zinc-900 border border-zinc-800 rounded-2xl">
   <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
@@ -72,5 +95,43 @@ async function loadZones() {
 loadStatus();
 loadZones();
 setInterval(loadStatus, 15000);
+
+// ----- IP history popup -----
+async function openIpHistory() {
+  const modal = document.getElementById('ip-history-modal');
+  const body = document.getElementById('ip-history-body');
+  modal.classList.remove('hidden');
+  body.innerHTML = '<div class="p-6 text-zinc-500 text-sm">Loading…</div>';
+  try {
+    const r = await fetch('/api/ip-history?limit=200');
+    if (!r.ok) throw new Error(await r.text());
+    const rows = await r.json();
+    if (!rows.length) {
+      body.innerHTML = '<div class="p-6 text-zinc-500 text-sm">No IP changes recorded yet. The engine will log every transition here.</div>';
+      return;
+    }
+    let html = '<table class="w-full text-sm"><thead class="bg-zinc-900/80 text-zinc-400 sticky top-0">'
+      + '<tr><th class="text-left px-4 py-2">When</th><th class="text-left px-4 py-2">Previous</th><th class="text-left px-4 py-2">→ New</th><th class="text-left px-4 py-2">Note</th></tr>'
+      + '</thead><tbody class="divide-y divide-zinc-800">';
+    for (const r of rows) {
+      const when = r.changed_at ? new Date(r.changed_at + 'Z').toLocaleString() : '—';
+      const prev = r.previous_ip ? `<span class="font-mono text-zinc-400">${r.previous_ip}</span>` : '<span class="text-zinc-600 text-xs italic">first observation</span>';
+      const noteBadge = r.note ? `<span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${r.note}</span>` : '';
+      html += `<tr><td class="px-4 py-2 text-zinc-400">${when}</td><td class="px-4 py-2">${prev}</td><td class="px-4 py-2 font-mono">${r.new_ip}</td><td class="px-4 py-2">${noteBadge}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div class="p-6 text-red-400 text-sm">Failed: ${e.message}</div>`;
+  }
+}
+
+function closeIpHistory() {
+  document.getElementById('ip-history-modal').classList.add('hidden');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeIpHistory();
+});
 </script>
 {% endblock %}

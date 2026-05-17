@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-17
+
+### Added
+- **Public-IP change history**. New `IpHistoryEntry` table records every
+  detected transition with previous IP, new IP, timestamp, and note
+  (`boot` for the first observation, `ip-change` for subsequent shifts).
+- **Dashboard popup**: the "Current Public IP" card is now clickable
+  (📜 history label) and opens a modal listing every recorded change,
+  newest first. Esc or click-outside closes it.
+- `GET /api/ip-history?limit=N` (default 100, max 1000).
+
 ## [0.5.4] - 2026-05-17
 
 ### Fixed

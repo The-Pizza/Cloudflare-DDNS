@@ -41,3 +41,13 @@ class Setting(SQLModel, table=True):
     key: str = Field(primary_key=True)
     value: str = ""
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class IpHistoryEntry(SQLModel, table=True):
+    """One row per detected public-IP transition. The engine appends a row
+    whenever `current_ip` changes (including the very first detection)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    previous_ip: Optional[str] = None      # None on the very first observation
+    new_ip: str
+    changed_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    note: str = ""                         # e.g. "boot", "ip-change", "manual-verify"
