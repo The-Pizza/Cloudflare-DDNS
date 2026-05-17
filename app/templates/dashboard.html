@@ -1,37 +1,76 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Cloudflare DDNS</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-zinc-950 text-zinc-200">
-<div class="max-w-6xl mx-auto p-8">
-    <h1 class="text-3xl font-semibold mb-8">Cloudflare DDNS v0.3</h1>
-    
-    <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800">
-        <h2 class="text-lg mb-4">Zones</h2>
-        <div id="zones" class="space-y-2"></div>
-    </div>
-</div>
+{% extends "base.html" %}
+{% block title %}Dashboard – Cloudflare DDNS{% endblock %}
+{% block content %}
+<section class="grid md:grid-cols-3 gap-6 mb-8">
+  <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+    <div class="text-zinc-400 text-sm">Current Public IP</div>
+    <div id="current-ip" class="mt-2 font-mono text-xl">—</div>
+  </div>
+  <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+    <div class="text-zinc-400 text-sm">Last Update</div>
+    <div id="last-update" class="mt-2 font-mono text-base">—</div>
+  </div>
+  <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+    <div class="text-zinc-400 text-sm">Managed / Enabled</div>
+    <div id="counts" class="mt-2 font-mono text-xl">0 / 0</div>
+  </div>
+</section>
+
+<section class="bg-zinc-900 border border-zinc-800 rounded-2xl">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+    <h2 class="text-lg font-semibold">Cloudflare Zones</h2>
+    <button onclick="loadZones()" class="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">↻ Refresh</button>
+  </div>
+  <div id="zones" class="divide-y divide-zinc-800">
+    <div class="p-5 text-zinc-500 text-sm">Loading…</div>
+  </div>
+</section>
 
 <script>
-async function loadZones() {
-    const res = await fetch('/api/zones');
-    const zones = await res.json();
-    const container = document.getElementById('zones');
-    container.innerHTML = '';
-    zones.forEach(z => {
-        const div = document.createElement('div');
-        div.className = 'flex justify-between p-3 bg-zinc-950 rounded-xl border border-zinc-800';
-        div.innerHTML = `
-            <div>${z.name}</div>
-            <a href="/zones/${z.id}?name=${z.name}" class="text-sm px-3 py-1 bg-zinc-800 rounded">Manage</a>
-        `;
-        container.appendChild(div);
-    });
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const s = await r.json();
+    document.getElementById('current-ip').textContent = s.current_ip || '—';
+    document.getElementById('last-update').textContent = s.last_update || '—';
+    document.getElementById('counts').textContent = `${s.managed_records} / ${s.enabled_records}`;
+  } catch (e) {
+    console.error(e);
+  }
 }
+async function loadZones() {
+  const target = document.getElementById('zones');
+  target.innerHTML = '<div class="p-5 text-zinc-500 text-sm">Loading…</div>';
+  try {
+    const r = await fetch('/api/zones');
+    if (!r.ok) throw new Error(await r.text());
+    const zones = await r.json();
+    if (zones.length === 0) {
+      target.innerHTML = '<div class="p-5 text-zinc-500 text-sm">No zones found. Check your CF_API_TOKEN.</div>';
+      return;
+    }
+    target.innerHTML = '';
+    zones.forEach(z => {
+      const row = document.createElement('a');
+      row.href = `/zones/${z.id}?name=${encodeURIComponent(z.name)}`;
+      row.className = 'flex items-center justify-between px-5 py-3 hover:bg-zinc-800/40';
+      row.innerHTML = `
+        <div>
+          <div class="font-mono">${z.name}</div>
+          <div class="text-xs text-zinc-500">${z.id}</div>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300">${z.status || 'active'}</span>
+          <span class="text-zinc-400">Manage →</span>
+        </div>`;
+      target.appendChild(row);
+    });
+  } catch (e) {
+    target.innerHTML = `<div class="p-5 text-red-400 text-sm">Failed to load zones: ${e.message}</div>`;
+  }
+}
+loadStatus();
 loadZones();
+setInterval(loadStatus, 15000);
 </script>
-</body>
-</html>
+{% endblock %}

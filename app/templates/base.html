@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{% block title %}Cloudflare DDNS{% endblock %}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='52' font-size='52'>☁️</text></svg>" />
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+</style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+<header class="border-b border-zinc-800 bg-zinc-900/60 backdrop-blur sticky top-0 z-10">
+  <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <a href="/" class="flex items-center gap-2 text-lg font-semibold">
+      <span class="text-orange-400">☁️</span>
+      <span>Cloudflare DDNS</span>
+    </a>
+    <nav class="flex items-center gap-4 text-sm text-zinc-300">
+      <a href="/" class="hover:text-white">Zones</a>
+      <a href="/discovered" class="hover:text-white">Discovered</a>
+      <a href="/health/ready" class="hover:text-white">Health</a>
+    </nav>
+  </div>
+</header>
+<main class="max-w-6xl mx-auto px-6 py-8">
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

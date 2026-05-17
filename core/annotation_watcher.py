@@ -1,33 +1,82 @@
-from kubernetes import client, config, watch
-from core.database import get_session
-from core.models import AnnotationTarget
-from datetime import datetime
+"""Annotation-based discovery.
 
-ANNOTATION_KEY = "cloudflare-ddns.witschger.home/dns-name"
+Scans Services, Ingresses, Deployments for the configured annotation
+key (default `cloudflare-ddns.witschger.home/dns-name`) and records the
+resulting hostnames as DiscoveredHost rows for the user to enable.
+"""
+import logging
+import time
+
+from kubernetes import client, config
+
+from core.config import settings
+from core.database import get_session
+from core.models import DiscoveredHost
+
+log = logging.getLogger("cfddns.annotation")
+
 
 class AnnotationWatcher:
     def __init__(self):
         try:
             config.load_incluster_config()
-        except:
+        except Exception:
             config.load_kube_config()
-        self.apps_v1 = client.AppsV1Api()
+        self.core = client.CoreV1Api()
+        self.apps = client.AppsV1Api()
+        self.net = client.NetworkingV1Api()
 
-    def watch_resources(self):
-        session = get_session()
-        w = watch.Watch()
-        for event in w.stream(self.apps_v1.list_deployment_for_all_namespaces, timeout_seconds=0):
-            obj = event['object']
-            annotations = obj.metadata.annotations or {}
-            if ANNOTATION_KEY in annotations:
-                dns_name = annotations[ANNOTATION_KEY]
-                target = AnnotationTarget(
-                    namespace=obj.metadata.namespace,
-                    name=obj.metadata.name,
-                    kind="Deployment",
-                    dns_name=dns_name,
-                    last_seen=datetime.utcnow()
+    def _record(self, host: str, kind: str, namespace: str, name: str) -> None:
+        sess = get_session()
+        try:
+            existing = (
+                sess.query(DiscoveredHost)
+                .filter(DiscoveredHost.host == host, DiscoveredHost.source == "annotation")
+                .first()
+            )
+            if existing:
+                existing.namespace = namespace
+                existing.resource_name = f"{kind}/{name}"
+            else:
+                sess.add(
+                    DiscoveredHost(
+                        host=host,
+                        source="annotation",
+                        namespace=namespace,
+                        resource_name=f"{kind}/{name}",
+                    )
                 )
-                session.add(target)
-                session.commit()
-                print(f"Discovered annotated Deployment: {obj.metadata.name} -> {dns_name}")
+            sess.commit()
+        finally:
+            sess.close()
+        log.info("Annotation discovery: %s on %s/%s/%s", host, namespace, kind, name)
+
+    def _walk(self, items, kind: str) -> None:
+        for it in items:
+            md = it.metadata
+            anns = md.annotations or {}
+            host = anns.get(settings.annotation_key)
+            if host:
+                self._record(host, kind, md.namespace or "", md.name or "")
+
+    def scan_once(self) -> None:
+        try:
+            self._walk(self.core.list_service_for_all_namespaces().items, "Service")
+        except Exception as e:
+            log.warning("Service scan failed: %s", e)
+        try:
+            self._walk(self.apps.list_deployment_for_all_namespaces().items, "Deployment")
+        except Exception as e:
+            log.warning("Deployment scan failed: %s", e)
+        try:
+            self._walk(self.net.list_ingress_for_all_namespaces().items, "Ingress")
+        except Exception as e:
+            log.warning("Ingress scan failed: %s", e)
+
+    def watch_loop(self, interval_seconds: int = 60) -> None:
+        while True:
+            try:
+                self.scan_once()
+            except Exception as e:
+                log.exception("Annotation scan failed: %s", e)
+            time.sleep(interval_seconds)

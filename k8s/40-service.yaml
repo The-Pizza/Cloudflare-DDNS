@@ -3,11 +3,14 @@ kind: Service
 metadata:
   name: cloudflare-ddns
   namespace: cloudflare-ddns
+  labels:
+    app.kubernetes.io/name: cloudflare-ddns
 spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: cloudflare-ddns
   ports:
-    - port: 8080
-      targetPort: 8080
+    - name: http
+      port: 8080
+      targetPort: http
       protocol: TCP
-  type: ClusterIP

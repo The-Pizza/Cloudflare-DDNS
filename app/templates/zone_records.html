@@ -1,50 +1,80 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Records - {{ zone_name }}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-zinc-950 text-zinc-200">
-<div class="max-w-6xl mx-auto p-8">
-    <a href="/" class="text-sm">← Back</a>
-    <h1 class="text-2xl mt-2 mb-6">{{ zone_name }}</h1>
-    
-    <div id="records" class="bg-zinc-900 rounded-2xl border border-zinc-800"></div>
+{% extends "base.html" %}
+{% block title %}{{ zone_name }} – Cloudflare DDNS{% endblock %}
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+  <div>
+    <a href="/" class="text-sm text-zinc-400 hover:text-white">← Back to zones</a>
+    <h1 class="text-2xl font-semibold mt-1">{{ zone_name }}</h1>
+    <div class="text-xs text-zinc-500 font-mono">{{ zone_id }}</div>
+  </div>
+  <button onclick="loadRecords()" class="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">↻ Refresh</button>
 </div>
 
+<section class="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-zinc-900/80 text-zinc-400">
+      <tr>
+        <th class="text-left px-4 py-3">Manage</th>
+        <th class="text-left px-4 py-3">Name</th>
+        <th class="text-left px-4 py-3">Type</th>
+        <th class="text-left px-4 py-3">Current Value</th>
+        <th class="text-left px-4 py-3">Proxied</th>
+        <th class="text-left px-4 py-3">Source</th>
+      </tr>
+    </thead>
+    <tbody id="rows" class="divide-y divide-zinc-800">
+      <tr><td colspan="6" class="px-4 py-6 text-zinc-500">Loading…</td></tr>
+    </tbody>
+  </table>
+</section>
+
 <script>
-const zoneId = "{{ zone_id }}";
-
+const ZONE = "{{ zone_id }}";
 async function loadRecords() {
-    const res = await fetch(`/api/zones/${zoneId}/records`);
-    const records = await res.json();
-    const container = document.getElementById('records');
-    container.innerHTML = '<table class="w-full"><tbody></tbody></table>';
-    const tbody = container.querySelector('tbody');
-    
-    records.forEach(r => {
-        const row = document.createElement('tr');
-        row.className = 'border-b border-zinc-800';
-        row.innerHTML = `
-            <td class="p-4"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggle('${r.id}', this.checked)"></td>
-            <td class="p-4 font-mono">${r.name}</td>
-            <td class="p-4">${r.type}</td>
-            <td class="p-4 text-zinc-400">${r.content || ''}</td>
-        `;
-        tbody.appendChild(row);
+  const tbody = document.getElementById('rows');
+  tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-zinc-500">Loading…</td></tr>';
+  try {
+    const r = await fetch(`/api/zones/${ZONE}/records`);
+    if (!r.ok) throw new Error(await r.text());
+    const rows = await r.json();
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-zinc-500">No A/AAAA records in this zone.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    rows.forEach(rec => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="px-4 py-2">
+          <label class="inline-flex items-center cursor-pointer">
+            <input type="checkbox" ${rec.enabled ? 'checked' : ''} class="accent-emerald-500" onchange="toggleRow(this, '${rec.id}')"/>
+          </label>
+        </td>
+        <td class="px-4 py-2 font-mono">${rec.name}</td>
+        <td class="px-4 py-2"><span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${rec.type}</span></td>
+        <td class="px-4 py-2 font-mono text-zinc-400">${rec.content || ''}</td>
+        <td class="px-4 py-2">${rec.proxied ? '☁️' : '○'}</td>
+        <td class="px-4 py-2 text-xs text-zinc-400">${rec.source || '-'}</td>`;
+      tbody.appendChild(tr);
     });
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-6 text-red-400">Failed: ${e.message}</td></tr>`;
+  }
 }
-
-async function toggle(recordId, enabled) {
-    await fetch(`/api/records/${recordId}/toggle`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({enabled})
+async function toggleRow(checkbox, recordId) {
+  const enabled = checkbox.checked;
+  try {
+    const r = await fetch(`/api/zones/${ZONE}/records/${recordId}/toggle`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled}),
     });
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {
+    alert('Toggle failed: ' + e.message);
+    checkbox.checked = !enabled;
+  }
 }
-
 loadRecords();
 </script>
-</body>
-</html>
+{% endblock %}

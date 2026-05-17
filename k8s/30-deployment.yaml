@@ -6,11 +6,14 @@ metadata:
   labels:
     app.kubernetes.io/name: cloudflare-ddns
   annotations:
+    # Keel: only roll within the same major.minor (no force, no downgrade)
     keel.sh/policy: minor
     keel.sh/trigger: poll
-    keel.sh/pollSchedule: "@every 1m"
+    keel.sh/pollSchedule: "@every 5m"
 spec:
   replicas: 1
+  strategy:
+    type: Recreate                # SQLite PVC = single-writer
   selector:
     matchLabels:
       app.kubernetes.io/name: cloudflare-ddns
@@ -19,13 +22,16 @@ spec:
       labels:
         app.kubernetes.io/name: cloudflare-ddns
     spec:
+      serviceAccountName: cloudflare-ddns
+      securityContext:
+        fsGroup: 10001
       containers:
         - name: cloudflare-ddns
-          image: ghcr.io/the-pizza/cloudflare-ddns:latest
-          imagePullPolicy: Always
+          image: ghcr.io/the-pizza/cloudflare-ddns:0.3.0
+          imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8080
-              name: http
+            - name: http
+              containerPort: 8080
           env:
             - name: CF_API_TOKEN
               valueFrom:
@@ -34,13 +40,28 @@ spec:
                   key: CF_API_TOKEN
             - name: CONFIG_PATH
               value: /etc/config/records.json
+            - name: DATABASE_URL
+              value: sqlite:////data/cloudflare-ddns.db
+            - name: ENABLE_ANNOTATION_DISCOVERY
+              value: "true"
+            - name: ENABLE_TRAEFIK_DISCOVERY
+              value: "true"
+            - name: ANNOTATION_KEY
+              value: "cloudflare-ddns.witschger.home/dns-name"
+            - name: POLL_INTERVAL_SECONDS
+              value: "60"
+            - name: LOG_LEVEL
+              value: INFO
           envFrom:
             - configMapRef:
                 name: cloudflare-ddns-settings
+                optional: true
           volumeMounts:
             - name: records
               mountPath: /etc/config
               readOnly: true
+            - name: data
+              mountPath: /data
           resources:
             requests:
               cpu: 50m
@@ -52,17 +73,27 @@ spec:
             httpGet:
               path: /health/live
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 15
             periodSeconds: 30
             failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 8080
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
       volumes:
         - name: records
           configMap:
             name: cloudflare-ddns-config
-            defaultMode: 292
+            optional: true
+        - name: data
+          persistentVolumeClaim:
+            claimName: cloudflare-ddns-data

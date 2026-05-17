@@ -1,201 +1,118 @@
-# Cloudflare Dynamic DNS Updater (IPv4-only)
+# Cloudflare DDNS
 
-A lightweight service that keeps **Cloudflare DNS A records** updated with your current public IPv4 address.  
-It polls a configurable endpoint (default: `ipinfo.io`), compares the current IP against Cloudflare, and creates or updates DNS records as needed.
+A modern, self-hosted Cloudflare Dynamic DNS updater with a Web UI,
+Kubernetes-aware auto-discovery, and persistent state.
 
-Works with **Cloudflare API Tokens** (recommended) or legacy **Global API Key + email**.
-
----
+[![release-image](https://github.com/The-Pizza/Cloudflare-DDNS/actions/workflows/release-image.yaml/badge.svg)](https://github.com/The-Pizza/Cloudflare-DDNS/actions/workflows/release-image.yaml)
 
 ## Features
 
-- Updates **A (IPv4)** records based on your current public IP.
-- **IPv6/AAAA support has been removed** for reliability in Kubernetes environments.
-- Creates records if they don’t exist.
-- Optional per-record overrides for TTL and “proxied” (orange-cloud) status.
-- Longest-suffix zone matching when zone is not provided in the config.
-- Auto-reloads configuration from a JSON file on a timer.
-- Only runs IP checks after a successful Cloudflare auth/resync.
-- Graceful handling of Cloudflare API errors and public IP endpoints.
-- Lightweight: Python with `requests` and standard library.
+* **Web UI** — browse every zone on your Cloudflare account, toggle which
+  A/AAAA records should be kept in sync with your public IP.
+* **Annotation discovery** — annotate any `Service`, `Deployment`, or
+  `Ingress` with `cloudflare-ddns.witschger.home/dns-name: foo.example.com`
+  and the host shows up in the "Discovered" tab.
+* **Traefik & Ingress discovery** — host rules from Traefik `IngressRoute`
+  CRDs and standard `Ingress` resources are also discovered automatically.
+* **Reliable updater** — only writes to Cloudflare when the public IP
+  actually changes (or a record's `last_ip` differs); handles per-record
+  errors without crashing the loop.
+* **Persistent** — SQLite-backed; survives pod restarts and image upgrades.
+* **Legacy compatible** — if you mount the original `records.json` ConfigMap
+  on first boot, those records are imported once into the database.
+* **Observable** — JSON status endpoint, structured logs, `/health/live`
+  and `/health/ready` probes.
 
----
+## Image
 
-## Bootstrapper: Initial Config Generator
+Published to GHCR by the `release-image` workflow on every published GitHub
+release. Tags produced:
 
-A helper script, [`cf_export_a_records.py`](./cf_export_a_records.py), can bootstrap your config by pulling **all existing A records** from your Cloudflare account and writing them into a `records.json` file.
-
-Usage:
-
-```bash
-python cf_export_a_records.py
+```
+ghcr.io/the-pizza/cloudflare-ddns:<version>     # e.g. 0.3.0
+ghcr.io/the-pizza/cloudflare-ddns:<major.minor>
+ghcr.io/the-pizza/cloudflare-ddns:<major>
+ghcr.io/the-pizza/cloudflare-ddns:latest        # only for non-prerelease
 ```
 
-You’ll be prompted for your Cloudflare API token (or legacy API key/email).  
-It will then:
+> Tags do **not** carry a leading `v`. If you cut release `v0.3.0` on GitHub
+> the resulting image is `:0.3.0` (semver pattern strips the `v`).
 
-- List all zones available to your credentials.
-- Extract all existing **A records**.
-- Write them into a `records.json` file compatible with the updater.
+## Configuration
 
-This provides a quick starting point to customize before running the updater.
+All knobs are environment variables (no prefix). See `.env.example`.
 
----
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CF_API_TOKEN` | _(required)_ | Cloudflare API token with `Zone:Read` and `DNS:Edit` on the zones you want to manage. |
+| `POLL_INTERVAL_SECONDS` | `60` | How often to re-check the public IP. |
+| `IPV4_ENDPOINT` | `https://ipinfo.io/ip` | Returns plain-text current IPv4. |
+| `IPV6_ENDPOINT` | _(empty)_ | Set to enable AAAA updates. |
+| `DATABASE_URL` | `sqlite:////app/data/cloudflare-ddns.db` | SQLAlchemy URL. |
+| `CONFIG_PATH` | `/etc/config/records.json` | Optional legacy `records.json` to import on first boot. |
+| `IMPORT_LEGACY_CONFIG` | `true` | Disable to skip legacy import. |
+| `ENABLE_ANNOTATION_DISCOVERY` | `true` | Scan K8s objects for `ANNOTATION_KEY`. |
+| `ENABLE_TRAEFIK_DISCOVERY` | `true` | Scan Traefik IngressRoute + standard Ingress for hosts. |
+| `ANNOTATION_KEY` | `cloudflare-ddns.witschger.home/dns-name` | Key checked by annotation discovery. |
+| `LOG_LEVEL` | `INFO` | Standard Python levels. |
 
-## Configuration file
+## Kubernetes
 
-The config is a JSON array of record objects at `CONFIG_PATH` (default: `/etc/config/records.json`).  
-Each object:
-
-- `name` (string, required) – record name (relative or FQDN)
-- `type` (string, required) – must be `"A"` (IPv4-only)
-- `ttl` (int, optional) – seconds; `1` means “auto” in Cloudflare; defaults to `DEFAULT_TTL`
-- `proxied` (bool, optional) – Cloudflare proxy (orange cloud) on/off; defaults to `DEFAULT_PROXIED`
-- `zone` (string, optional) – the zone name (e.g., `example.com`). If omitted, the app picks the best matching zone by longest suffix.
-
-Example `records.json`:
-
-```json
-[
-  {
-    "name": "home",
-    "zone": "example.com",
-    "type": "A",
-    "ttl": 300,
-    "proxied": false
-  },
-  {
-    "name": "vpn.example.net",
-    "type": "A",
-    "proxied": true
-  }
-]
-```
-
-Notes:
-- Booleans must be `true`/`false` (not `"true"`/`"false"`).
-- If `name` is not an FQDN but `zone` is specified, the code normalizes it by appending the zone.
-- The app exits on JSON parse errors and logs the offending line number.
-
----
-
-## Environment variables
-
-- `CF_API_TOKEN` – Cloudflare API Token (preferred)
-- `CF_API_KEY` – Cloudflare Global API Key (legacy)
-- `CF_API_EMAIL` – Cloudflare account email (required if using CF_API_KEY)
-- `CF_API_URL` – Cloudflare API base URL (default: https://api.cloudflare.com/client/v4)
-- `CONFIG_PATH` – Path to records JSON (default: /etc/config/records.json)
-- `IP_POLL_INTERVAL_SECONDS` – Interval to poll IP endpoints (default: 60)
-- `CF_RESYNC_INTERVAL_SECONDS` – Interval to resync Cloudflare zones/cache (default: 3600)
-- `REQUEST_TIMEOUT_SECONDS` – HTTP timeout for requests (default: 10)
-- `IPV4_ENDPOINT` – IPv4 endpoint to detect public IP (default: https://ipinfo.io/ip)
-- `LOG_LEVEL` – logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) (default: INFO)
-- `DEFAULT_TTL` – default TTL for records unless overridden (default: 300; `1` means auto)
-- `DEFAULT_PROXIED` – default proxied flag unless overridden (default: false)
-
----
-
-## Requirements
-
-- Python 3.8+
-- Dependencies listed in [`requirements.txt`](./requirements.txt)
-
-Install manually:
+Manifests are in `k8s/`. Apply in order:
 
 ```bash
+kubectl apply -f k8s/
+```
+
+Required up-front:
+
+1. Namespace `cloudflare-ddns` (created by `00-namespace.yaml`).
+2. Secret `cloudflare-ddns-secret` with key `CF_API_TOKEN`:
+
+```bash
+kubectl -n cloudflare-ddns create secret generic cloudflare-ddns-secret \
+  --from-literal=CF_API_TOKEN=cfut_xxx
+```
+
+3. (Optional, legacy) ConfigMap `cloudflare-ddns-config` with `records.json`
+   to import existing records.
+4. (Optional) ConfigMap `cloudflare-ddns-settings` to override env vars
+   without editing the Deployment.
+
+### Internal TLS
+
+`k8s/50-certificate.yaml` issues a cert from the `localca` ClusterIssuer
+for `ddns.witschger.home`. The `Ingress` (`k8s/60-ingress.yaml`) references
+the resulting `ddns-witschger-home-tls` secret. The hostname is internal:
+add an `A` record `ddns.witschger.home -> <traefik-internal LB IP>` in your
+local DNS.
+
+## Local development
+
+```bash
+python3.12 -m venv .venv
+. .venv/bin/activate
 pip install -r requirements.txt
+export CF_API_TOKEN=cfut_xxx
+uvicorn app.main:app --reload
+# -> http://127.0.0.1:8000
 ```
 
----
+## Endpoints
 
-## Running locally
-
-1. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Export your Cloudflare API token:
-
-   ```bash
-   export CF_API_TOKEN=your_token_here
-   ```
-
-3. Create or bootstrap a config file:
-
-   ```bash
-   python cf_export_a_records.py
-   ```
-
-   This generates `records.json`, which you can edit if needed.
-
-4. Run:
-
-   ```bash
-   python cloudflare-ddns.py
-   ```
-
-Logs will show zone discovery, record cache status, current IPs, and create/update actions.
-
----
-
-## Docker
-
-The project ships with a Dockerfile that installs dependencies via `requirements.txt`.
-
-Build:
-
-```bash
-docker build -t cf-dns-updater:latest .
-```
-
-Run (mount your config read-only and pass credentials):
-
-```bash
-docker run --rm   -e CF_API_TOKEN=your_token_here   -v $(pwd)/records.json:/etc/config/records.json:ro   cf-dns-updater:latest
-```
-
-Example `docker-compose.yml`:
-
-```yaml
-services:
-  cf-dns-updater:
-    image: cf-dns-updater:latest
-    environment:
-      - CF_API_TOKEN=${CF_API_TOKEN}
-      - LOG_LEVEL=INFO
-    volumes:
-      - ./records.json:/etc/config/records.json:ro
-    restart: unless-stopped
-```
-
----
-
-## Cloudflare API token setup
-
-1. Go to Cloudflare Dashboard → My Profile → API Tokens → Create Custom Token.
-2. Permissions:
-   - Zone → Read
-   - DNS → Edit
-3. Zone Resources: restrict to the specific zones you intend to manage (recommended) or All zones (broader).
-4. Copy the token and set it as `CF_API_TOKEN`.
-
-The updater lists zones available to the token and picks the best matching zone for each record by suffix. If a zone is missing or the token lacks access, the log will show an error and skip that record.
-
----
-
-## Development Notes
-
-- IPv6/AAAA support has been removed. The updater only manages IPv4 A records.
-- [`requirements.txt`](./requirements.txt) defines Python dependencies for local runs and the Docker image.
-- [`cf_export_a_records.py`](./cf_export_a_records.py) bootstraps your `records.json` config.
-- [`cloudflare-ddns.py`](./cloudflare-ddns.py) is the main updater service.
-- Dockerfile uses Python 3.12 slim with a non-root user.
-
----
+| Path | Description |
+| --- | --- |
+| `/` | Dashboard (status + zones) |
+| `/zones/{zone_id}?name=…` | Per-zone record manager |
+| `/discovered` | Annotation / Traefik / Ingress discovery results |
+| `/api/zones` | JSON list of zones |
+| `/api/zones/{zone_id}/records` | JSON list of A/AAAA records with managed-state |
+| `/api/zones/{zone_id}/records/{record_id}/toggle` | `POST {"enabled": bool}` |
+| `/api/discovered` | JSON discovered hosts |
+| `/api/status` | Engine status JSON |
+| `/health/live` `/health/ready` | Probes |
+| `/docs` | OpenAPI |
 
 ## License
 
-Add a license file (e.g., MIT, Apache-2.0) appropriate for your project.
+MIT
