@@ -92,22 +92,17 @@ async function loadSettings() {
       (byGroup[meta.group || 'Other'] = byGroup[meta.group || 'Other'] || []).push([key, info, meta]);
     }
     const groupOrder = ['Cloudflare', 'DDNS engine', 'Discovery', 'Authentication', 'OIDC client', 'Forward-auth headers', 'Other'];
-    // Conditional visibility: only show OIDC fields when mode=oidc, forward-auth when mode=forward-auth.
-    const isVisible = (group) => {
-      if (group === 'OIDC client') return currentMode === 'oidc';
-      if (group === 'Forward-auth headers') return currentMode === 'forward-auth';
-      return true;
-    };
     for (const group of groupOrder) {
       if (!byGroup[group]) continue;
-      if (!isVisible(group)) continue;
       const header = document.createElement('div');
+      header.setAttribute('data-group', group);
       header.className = 'px-6 py-3 bg-zinc-950/50 border-b border-zinc-800 text-xs uppercase tracking-wider text-zinc-400 font-semibold';
       header.textContent = group;
       container.appendChild(header);
       for (const [key, info, meta] of byGroup[group]) {
         const locked = info.env_locked;
         const row = document.createElement('div');
+        row.setAttribute('data-group', group);
         row.className = 'px-6 py-4 grid md:grid-cols-3 gap-4 items-center';
         let input;
         if (meta.type === 'bool') {
@@ -136,27 +131,30 @@ async function loadSettings() {
         container.appendChild(row);
       }
     }
+    // Initial visibility based on the persisted auth_mode
+    renderForMode(currentMode);
   } catch (e) {
     container.innerHTML = `<div class="p-6 text-red-400 text-sm">Failed: ${e.message}</div>`;
   }
 }
 
-// When the auth_mode dropdown changes, save it AND re-render so the
-// matching section appears/disappears immediately. The user no longer
-// has to hit "Save" separately for the visibility change to apply.
-async function onAuthModeChange(sel) {
-  const value = sel.value;
-  try {
-    const r = await fetch('/api/settings', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({key: 'auth_mode', value}),
-    });
-    if (!r.ok) throw new Error(await r.text());
-    showToast(`Auth mode → ${value}`);
-    loadSettings();
-  } catch (e) {
-    showToast('Auth mode change failed: ' + e.message, 'red');
-  }
+// Dropdown change → re-render sections only. Nothing is saved until the user
+// hits Save (which is exactly how every other field works). Avoids the trap
+// where flipping to a broken mode immediately locks you out.
+function onAuthModeChange(sel) {
+  renderForMode(sel.value);
+}
+
+function renderForMode(mode) {
+  const m = String(mode || 'none').toLowerCase();
+  // Toggle group visibility based on the chosen mode
+  document.querySelectorAll('[data-group]').forEach(el => {
+    const g = el.getAttribute('data-group');
+    let show = true;
+    if (g === 'OIDC client') show = (m === 'oidc');
+    else if (g === 'Forward-auth headers') show = (m === 'forward-auth');
+    el.style.display = show ? '' : 'none';
+  });
 }
 
 async function saveSetting(key, type) {

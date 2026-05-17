@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-05-17
+
+### Fixed
+- `auth_mode` dropdown no longer auto-saves on change — flipping to
+  `forward-auth` while you have no reverse-proxy in front would
+  immediately lock you out of the UI. Now the dropdown only toggles
+  which auth section is visible; nothing persists until you click Save.
+
 ## [0.5.3] - 2026-05-17
 
 ### Fixed
