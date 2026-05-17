@@ -4,7 +4,7 @@ httpx==0.28.1
 pydantic-settings==2.7.0
 jinja2==3.1.5
 python-multipart==0.0.20
-kubernetes==31.0.0
+kubernetes==35.0.0
 sqlmodel==0.0.22
 prometheus-client==0.21.1
 authlib==1.3.2
