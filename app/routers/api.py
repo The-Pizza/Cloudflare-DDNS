@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from core.cloudflare_client import CloudflareClient
-from core.config import RUNTIME_SETTINGS_KEYS, env_locked, get_effective, settings
+from core.config import RUNTIME_SETTINGS_KEYS, SECRET_KEYS, env_locked, get_effective, settings
 from core.database import get_session
 from core.models import DiscoveredHost, ManagedRecord, Setting
 
@@ -321,10 +321,10 @@ async def get_settings():
     out = {}
     for key in RUNTIME_SETTINGS_KEYS:
         value = get_effective(key, rows.get(key))
-        # Mask the token in the response
         display = value
-        if key == "cf_api_token" and value:
-            display = f"{str(value)[:4]}…{str(value)[-4:]}" if len(str(value)) > 8 else "set"
+        if key in SECRET_KEYS and value:
+            s = str(value)
+            display = f"{s[:4]}…{s[-4:]}" if len(s) > 8 else "set"
         out[key] = {
             "value": display,
             "raw_set": bool(rows.get(key)),
@@ -376,5 +376,5 @@ async def engine_status(request: Request):
         "last_error": engine.last_error if engine else None,
         "managed_records": managed_count,
         "enabled_records": enabled_count,
-        "auth_mode": settings.auth_mode,
+        "auth_mode": str(get_effective("auth_mode") or "none"),
     }

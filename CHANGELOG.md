@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-05-17
+
+### Fixed
+- **`get_effective()` now reads the DB when called without a pre-fetched
+  value** (previously it fell straight through to env / dataclass
+  defaults). This means the runtime middleware actually honours
+  Settings-page changes for `auth_mode` and every other runtime key —
+  prior to this fix, flipping `auth_mode=oidc` in the UI silently kept
+  the app open. Critical security fix for the auth feature.
+
+### Changed
+- Settings GET response masks every key in `SECRET_KEYS`
+  (`cf_api_token`, `oidc_client_secret`, `session_secret`), not just
+  the Cloudflare token.
+
 ## [0.5.0] - 2026-05-17
 
 ### Added

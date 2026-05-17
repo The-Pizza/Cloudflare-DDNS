@@ -126,14 +126,40 @@ def env_locked() -> Set[str]:
     return locked
 
 
+def _db_value(key: str) -> Optional[str]:
+    """Look up the persisted value of a runtime setting from the DB.
+
+    Returns None on any error so this can be called from middleware before
+    the DB is fully initialized (and so a missing `setting` table is a
+    soft-fail).
+    """
+    try:
+        from core.database import get_session
+        from core.models import Setting
+    except Exception:
+        return None
+    try:
+        sess = get_session()
+        try:
+            row = sess.query(Setting).filter(Setting.key == key).first()
+            return row.value if row else None
+        finally:
+            sess.close()
+    except Exception:
+        return None
+
+
 def get_effective(key: str, db_value: Optional[str] = None):
     """Return the active value for a runtime-tunable setting.
 
-    Order: env (already absorbed into `settings`) wins; otherwise DB value;
-    otherwise the dataclass default.
+    Order: env (already absorbed into `settings`) wins; otherwise DB value
+    (looked up here if the caller didn't pre-fetch one); otherwise the
+    dataclass default.
     """
     if key in env_locked():
         return getattr(settings, key)
+    if db_value is None:
+        db_value = _db_value(key)
     if db_value is not None and db_value != "":
         # Coerce to the expected type based on the dataclass default
         default = getattr(settings, key)
