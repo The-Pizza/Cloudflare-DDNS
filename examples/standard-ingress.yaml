@@ -1,0 +1,24 @@
+# Example: Ingress host discovery
+#
+# Any Ingress with a `spec.rules[].host` is automatically discovered.
+# No special annotation needed -- just make sure
+# ENABLE_TRAEFIK_DISCOVERY=true in the DDNS Deployment.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: example-app
+  namespace: default
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: example.witschger.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: example-app
+                port:
+                  number: 80

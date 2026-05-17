@@ -1,0 +1,37 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      placeholder: Pod restarts, UI 500s, records not updating, etc.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag or git SHA (`/api/status` reports the running version indirectly).
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `kubectl logs -n cloudflare-ddns -l app.kubernetes.io/name=cloudflare-ddns --tail=100`
+      render: shell
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      placeholder: |
+        - Kubernetes version:
+        - Ingress controller:
+        - Storage class:
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?

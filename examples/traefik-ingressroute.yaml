@@ -1,0 +1,19 @@
+# Example: Traefik IngressRoute host discovery
+#
+# Host(`foo.bar`) and HostRegexp(`foo.bar`) in the match string are
+# parsed and surfaced in the "Discovered" tab.
+
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: example-app
+  namespace: default
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`example.witschger.net`) && PathPrefix(`/`)
+      kind: Rule
+      services:
+        - name: example-app
+          port: 80

@@ -144,6 +144,7 @@ async def engine_status(request: Request):
     finally:
         sess.close()
     return {
+        "version": request.app.version,
         "current_ip": engine.current_ip if engine else None,
         "last_update": engine.last_update.isoformat() if engine and engine.last_update else None,
         "last_error": engine.last_error if engine else None,

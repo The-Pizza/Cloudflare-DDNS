@@ -1,93 +1,101 @@
 # Cloudflare DDNS
 
-A modern, self-hosted Cloudflare Dynamic DNS updater with a Web UI,
-Kubernetes-aware auto-discovery, and persistent state.
+> Self-hosted Cloudflare Dynamic DNS with a real Web UI and Kubernetes auto-discovery.
 
 [![release-image](https://github.com/The-Pizza/Cloudflare-DDNS/actions/workflows/release-image.yaml/badge.svg)](https://github.com/The-Pizza/Cloudflare-DDNS/actions/workflows/release-image.yaml)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-cloudflare--ddns-blue?logo=github)](https://github.com/The-Pizza/Cloudflare-DDNS/pkgs/container/cloudflare-ddns)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Features
+---
 
-* **Web UI** — browse every zone on your Cloudflare account, toggle which
-  A/AAAA records should be kept in sync with your public IP.
-* **Annotation discovery** — annotate any `Service`, `Deployment`, or
+A modern replacement for the original `cloudflare-ddns.py` script: now a
+proper FastAPI service with persistent state, a Tailwind web UI, and
+Kubernetes-aware discovery so you can stop hand-editing `records.json`.
+
+## ✨ Features
+
+* **🌐 Web UI** — Tailwind dashboard for browsing every Cloudflare zone
+  on your account and toggling per-record auto-update with one click.
+* **🏷️ Annotation discovery** — Tag any `Service`, `Deployment`, or
   `Ingress` with `cloudflare-ddns.witschger.home/dns-name: foo.example.com`
-  and the host shows up in the "Discovered" tab.
-* **Traefik & Ingress discovery** — host rules from Traefik `IngressRoute`
-  CRDs and standard `Ingress` resources are also discovered automatically.
-* **Reliable updater** — only writes to Cloudflare when the public IP
-  actually changes (or a record's `last_ip` differs); handles per-record
-  errors without crashing the loop.
-* **Persistent** — SQLite-backed; survives pod restarts and image upgrades.
-* **Legacy compatible** — if you mount the original `records.json` ConfigMap
-  on first boot, those records are imported once into the database.
-* **Observable** — JSON status endpoint, structured logs, `/health/live`
-  and `/health/ready` probes.
+  and it shows up in the **Discovered** tab.
+* **🛣️ Traefik & Ingress discovery** — Host rules from Traefik
+  `IngressRoute` CRDs and standard `networking.k8s.io/v1` Ingresses are
+  also auto-discovered.
+* **🔁 Reliable updater** — Only writes to Cloudflare when the public IP
+  actually changes; per-record errors don’t crash the loop.
+* **💾 Persistent** — SQLite on a PVC; survives upgrades, restarts and
+  pod rescheduling.
+* **🪶 Lightweight** — Single container, no Helm chart, no JS bundler.
+* **🩺 Observable** — `/health/live`, `/health/ready`, JSON `/api/status`.
 
-## Image
+## 🚀 Quick start (Kubernetes)
 
-Published to GHCR by the `release-image` workflow on every published GitHub
-release. Tags produced:
+```bash
+# 1. Create the namespace + secret
+kubectl create namespace cloudflare-ddns
+kubectl -n cloudflare-ddns create secret generic cloudflare-ddns-secret \
+  --from-literal=CF_API_TOKEN=cfut_xxx
+
+# 2. Apply the manifests (they are numbered to be applied in order)
+kubectl apply -f https://raw.githubusercontent.com/The-Pizza/Cloudflare-DDNS/main/k8s/00-namespace.yaml
+kubectl apply -f https://raw.githubusercontent.com/The-Pizza/Cloudflare-DDNS/main/k8s/
+
+# 3. Point your internal DNS record (e.g. ddns.example.lan -> your-traefik-LB-IP)
+# 4. Open https://ddns.example.lan
+```
+
+Or clone and apply:
+
+```bash
+git clone https://github.com/The-Pizza/Cloudflare-DDNS.git
+kubectl apply -f Cloudflare-DDNS/k8s/
+```
+
+The default manifests assume:
+
+* IngressClass `traefik-internal` (change in `k8s/50-ingress.yaml`)
+* cert-manager `ClusterIssuer` named `localca` (change the annotation
+  if you use Let's Encrypt etc.)
+* StorageClass `nfs-csi` (or any RWO; tweak `k8s/20-pvc.yaml`)
+
+## 🐳 Container image
+
+Published by GitHub Actions on every release:
+
+| Tag pattern | Example | Notes |
+| --- | --- | --- |
+| `<version>` | `0.3.0` | Exact release (no leading `v`). |
+| `<major.minor>` | `0.3` | Floats with patches. |
+| `<major>` | `0` | Floats with minors. |
+| `latest` | `latest` | Only for non-prerelease tags. |
 
 ```
-ghcr.io/the-pizza/cloudflare-ddns:<version>     # e.g. 0.3.0
-ghcr.io/the-pizza/cloudflare-ddns:<major.minor>
-ghcr.io/the-pizza/cloudflare-ddns:<major>
-ghcr.io/the-pizza/cloudflare-ddns:latest        # only for non-prerelease
+ghcr.io/the-pizza/cloudflare-ddns:0.3.0
 ```
 
-> Tags do **not** carry a leading `v`. If you cut release `v0.3.0` on GitHub
-> the resulting image is `:0.3.0` (semver pattern strips the `v`).
+Linux `amd64` + `arm64`.
 
-## Configuration
+## ⚙️ Configuration
 
-All knobs are environment variables (no prefix). See `.env.example`.
+Every setting is an environment variable. Copy `.env.example` to `.env`
+for local dev.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CF_API_TOKEN` | _(required)_ | Cloudflare API token with `Zone:Read` and `DNS:Edit` on the zones you want to manage. |
-| `POLL_INTERVAL_SECONDS` | `60` | How often to re-check the public IP. |
-| `IPV4_ENDPOINT` | `https://ipinfo.io/ip` | Returns plain-text current IPv4. |
+| `CF_API_TOKEN` | _(required)_ | API token with `Zone:Read` + `DNS:Edit`. |
+| `POLL_INTERVAL_SECONDS` | `60` | How often to re-check the public IP and run discovery. |
+| `IPV4_ENDPOINT` | `https://ipinfo.io/ip` | Returns plain-text IPv4. |
 | `IPV6_ENDPOINT` | _(empty)_ | Set to enable AAAA updates. |
 | `DATABASE_URL` | `sqlite:////app/data/cloudflare-ddns.db` | SQLAlchemy URL. |
-| `CONFIG_PATH` | `/etc/config/records.json` | Optional legacy `records.json` to import on first boot. |
-| `IMPORT_LEGACY_CONFIG` | `true` | Disable to skip legacy import. |
+| `CONFIG_PATH` | `/etc/config/records.json` | Optional legacy file to import once. |
+| `IMPORT_LEGACY_CONFIG` | `true` | Set `false` to skip legacy import. |
 | `ENABLE_ANNOTATION_DISCOVERY` | `true` | Scan K8s objects for `ANNOTATION_KEY`. |
-| `ENABLE_TRAEFIK_DISCOVERY` | `true` | Scan Traefik IngressRoute + standard Ingress for hosts. |
-| `ANNOTATION_KEY` | `cloudflare-ddns.witschger.home/dns-name` | Key checked by annotation discovery. |
-| `LOG_LEVEL` | `INFO` | Standard Python levels. |
+| `ENABLE_TRAEFIK_DISCOVERY` | `true` | Scan Traefik + standard Ingress. |
+| `ANNOTATION_KEY` | `cloudflare-ddns.witschger.home/dns-name` | Annotation looked up by the discovery loop. |
+| `LOG_LEVEL` | `INFO` | Standard Python log level. |
 
-## Kubernetes
-
-Manifests are in `k8s/`. Apply in order:
-
-```bash
-kubectl apply -f k8s/
-```
-
-Required up-front:
-
-1. Namespace `cloudflare-ddns` (created by `00-namespace.yaml`).
-2. Secret `cloudflare-ddns-secret` with key `CF_API_TOKEN`:
-
-```bash
-kubectl -n cloudflare-ddns create secret generic cloudflare-ddns-secret \
-  --from-literal=CF_API_TOKEN=cfut_xxx
-```
-
-3. (Optional, legacy) ConfigMap `cloudflare-ddns-config` with `records.json`
-   to import existing records.
-4. (Optional) ConfigMap `cloudflare-ddns-settings` to override env vars
-   without editing the Deployment.
-
-### Internal TLS
-
-`k8s/50-certificate.yaml` issues a cert from the `localca` ClusterIssuer
-for `ddns.witschger.home`. The `Ingress` (`k8s/60-ingress.yaml`) references
-the resulting `ddns-witschger-home-tls` secret. The hostname is internal:
-add an `A` record `ddns.witschger.home -> <traefik-internal LB IP>` in your
-local DNS.
-
-## Local development
+## 🧪 Local development
 
 ```bash
 python3.12 -m venv .venv
@@ -98,7 +106,14 @@ uvicorn app.main:app --reload
 # -> http://127.0.0.1:8000
 ```
 
-## Endpoints
+Build the container:
+
+```bash
+podman build -t cloudflare-ddns:dev .
+podman run --rm -p 8080:8080 -e CF_API_TOKEN=cfut_xxx cloudflare-ddns:dev
+```
+
+## 🌐 Endpoints
 
 | Path | Description |
 | --- | --- |
@@ -106,13 +121,31 @@ uvicorn app.main:app --reload
 | `/zones/{zone_id}?name=…` | Per-zone record manager |
 | `/discovered` | Annotation / Traefik / Ingress discovery results |
 | `/api/zones` | JSON list of zones |
-| `/api/zones/{zone_id}/records` | JSON list of A/AAAA records with managed-state |
+| `/api/zones/{zone_id}/records` | JSON list of A/AAAA records + managed-state |
 | `/api/zones/{zone_id}/records/{record_id}/toggle` | `POST {"enabled": bool}` |
 | `/api/discovered` | JSON discovered hosts |
 | `/api/status` | Engine status JSON |
 | `/health/live` `/health/ready` | Probes |
-| `/docs` | OpenAPI |
+| `/docs` | OpenAPI / Swagger UI |
 
-## License
+## 🔄 Legacy upgrade
 
-MIT
+If you’re coming from the `0.1.x` / `0.2.x` script-based releases:
+
+1. Apply the new manifests — your existing `cloudflare-ddns-config`
+   ConfigMap (with `records.json`) is **automatically imported once** on
+   first boot, all records enabled.
+2. After confirming the records show up in the **Zones** UI, you can
+   delete the ConfigMap if you no longer want the legacy import on disk:
+   `kubectl delete cm cloudflare-ddns-config -n cloudflare-ddns`.
+3. The new pod uses different env vars (no `CFDDNS_` prefix); the old
+   `cloudflare-ddns-settings` ConfigMap is still read (as `envFrom`) but
+   its keys are ignored unless they happen to match new variable names.
+
+## 🛠 Contributing
+
+Bug reports and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 📝 License
+
+[MIT](LICENSE) © Ryan Witschger
