@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cloudflare-ddns-ui
+  namespace: cloudflare-ddns
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    cert-manager.io/cluster-issuer: localca
+    cloudflare-ddns.witschger.home/dns-name: "ddns.witschger.home"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ddns.witschger.home
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cloudflare-ddns
+                port:
+                  number: 8080
+  tls:
+    - hosts:
+        - ddns.witschger.home
+      secretName: ddns-witschger-home-tls
