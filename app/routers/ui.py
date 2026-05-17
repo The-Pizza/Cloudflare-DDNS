@@ -28,3 +28,8 @@ async def zone_detail(request: Request, zone_id: str, name: str = ""):
 @router.get("/discovered", response_class=HTMLResponse)
 async def discovered_page(request: Request):
     return templates.TemplateResponse(request, "discovered.html")
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return templates.TemplateResponse(request, "settings.html")

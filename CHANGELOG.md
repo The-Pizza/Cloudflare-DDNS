@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-17
+
+### Added
+- **Merged zone view**: each zone page now shows real Cloudflare A/AAAA
+  records AND discovered hostnames belonging to that zone. Discovered
+  hosts without a matching CF record get a one-click **Create** button
+  that creates the record at the current public IP and enables DDNS.
+- **Inline proxied toggle** per record — click the ☁️/○ icon to flip
+  Cloudflare's `proxied` flag without leaving the page.
+- **Manual "Add record" form** on every zone page for fast ad-hoc
+  record creation (subdomain or FQDN, A/AAAA, optional value defaulting
+  to current public IP, proxied checkbox).
+- **"Check now" button** runs a full validate-and-sync over every
+  enabled record and reports a toast like
+  `34 checked · 33 in sync · 1 updated · 0 errors`.
+- **Settings page** (`/settings`) for runtime config: CF API token,
+  IPv4/IPv6 endpoints, poll interval, default proxied/TTL, annotation
+  key, auth mode. Values backed by SQLite. Fields supplied via
+  env / ConfigMap are auto-detected, greyed out, and tagged
+  **env-locked** so operators retain authority.
+- `Setting` SQLModel table for runtime-mutable config.
+- `auth_mode` setting (`none` | `forward-auth`) — advisory flag for
+  pairing with an external Authentik forward-auth middleware.
+
+### Changed
+- Top nav: **Health** link removed (probes still exposed at
+  `/health/live` and `/health/ready` for Kubernetes); replaced with
+  **Settings**.
+
 ## [0.3.1] - 2025-05-17
 
 ### Added

@@ -18,7 +18,7 @@ class ManagedRecord(SQLModel, table=True):
     ttl: int = 1
     last_ip: Optional[str] = None
     last_updated: Optional[datetime] = None
-    source: str = "manual"          # manual | legacy-config | annotation | ingress
+    source: str = "manual"          # manual | legacy-config | annotation | ingress | discovered
 
 
 class DiscoveredHost(SQLModel, table=True):
@@ -30,3 +30,14 @@ class DiscoveredHost(SQLModel, table=True):
     namespace: str = ""
     resource_name: str = ""
     first_seen: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Setting(SQLModel, table=True):
+    """Runtime-mutable configuration, settable via the Settings page.
+
+    Values here only take effect if the corresponding env var is NOT set
+    (env / ConfigMap always wins, so operators retain authority).
+    """
+    key: str = Field(primary_key=True)
+    value: str = ""
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

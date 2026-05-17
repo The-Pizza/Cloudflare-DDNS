@@ -1,13 +1,15 @@
 """JSON API for the web UI and external automation."""
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from core.cloudflare_client import CloudflareClient
+from core.config import RUNTIME_SETTINGS_KEYS, env_locked, get_effective, settings
 from core.database import get_session
-from core.models import DiscoveredHost, ManagedRecord
+from core.models import DiscoveredHost, ManagedRecord, Setting
 
 log = logging.getLogger("cfddns.api")
 router = APIRouter()
@@ -15,7 +17,8 @@ router = APIRouter()
 
 def _cf() -> CloudflareClient:
     # Per-call so token refresh / hot reload works
-    return CloudflareClient()
+    tok = get_effective("cf_api_token")
+    return CloudflareClient(token=str(tok) if tok else settings.cf_api_token)
 
 
 # ---- Zones / records ----
@@ -26,22 +29,46 @@ async def list_zones():
     return [{"id": z["id"], "name": z["name"], "status": z.get("status")} for z in zones]
 
 
+def _host_in_zone(host: str, zone_name: str) -> bool:
+    return host == zone_name or host.endswith("." + zone_name)
+
+
 @router.get("/zones/{zone_id}/records")
 async def list_records(zone_id: str):
-    cf_records = await _cf().list_dns_records(zone_id)
+    """Return both real CF records AND discovered hosts whose name belongs to this zone
+    but don't yet have a Cloudflare A/AAAA record."""
+    cf = _cf()
+    cf_records = await cf.list_dns_records(zone_id)
+    zones = await cf.list_zones()
+    zone = next((z for z in zones if z["id"] == zone_id), None)
+    if not zone:
+        raise HTTPException(404, "Zone not found")
+    zone_name = zone["name"]
+
     sess = get_session()
     try:
         managed = {
             m.record_id: m
             for m in sess.query(ManagedRecord).filter(ManagedRecord.zone_id == zone_id).all()
         }
+        discovered = sess.query(DiscoveredHost).all()
     finally:
         sess.close()
-    out = []
+
+    out: List[dict] = []
+    cf_names_seen = set()
     for r in cf_records:
         if r["type"] not in ("A", "AAAA"):
             continue
+        cf_names_seen.add(r["name"])
         m = managed.get(r["id"])
+        # If the user hasn't toggled this on, but discovery has seen the hostname,
+        # tag the source as the discovery source so the user understands where
+        # it came from.
+        discovered_match = next((d for d in discovered if d.host == r["name"]), None)
+        source = (
+            m.source if m else (discovered_match.source if discovered_match else None)
+        )
         out.append({
             "id": r["id"],
             "name": r["name"],
@@ -50,10 +77,32 @@ async def list_records(zone_id: str):
             "proxied": r.get("proxied", False),
             "ttl": r.get("ttl", 1),
             "enabled": bool(m and m.enabled),
-            "source": m.source if m else None,
+            "source": source,
+            "exists_in_cf": True,
             "last_ip": m.last_ip if m else None,
             "last_updated": m.last_updated.isoformat() if m and m.last_updated else None,
         })
+
+    # Discovered hosts in this zone that have NO matching CF record yet
+    for d in discovered:
+        if not _host_in_zone(d.host, zone_name):
+            continue
+        if d.host in cf_names_seen:
+            continue
+        out.append({
+            "id": None,
+            "name": d.host,
+            "type": "A",
+            "content": None,
+            "proxied": None,
+            "ttl": None,
+            "enabled": False,
+            "source": d.source,
+            "exists_in_cf": False,
+            "namespace": d.namespace,
+            "resource_name": d.resource_name,
+        })
+    out.sort(key=lambda r: r["name"])
     return out
 
 
@@ -67,7 +116,6 @@ class ToggleRequest(BaseModel):
 
 @router.post("/zones/{zone_id}/records/{record_id}/toggle")
 async def toggle_record(zone_id: str, record_id: str, body: ToggleRequest):
-    # Fetch the record from Cloudflare so we know name/type/proxied/ttl
     records = await _cf().list_dns_records(zone_id)
     target = next((r for r in records if r["id"] == record_id), None)
     if not target:
@@ -110,6 +158,90 @@ async def toggle_record(zone_id: str, record_id: str, body: ToggleRequest):
     return {"status": "ok"}
 
 
+class ProxiedRequest(BaseModel):
+    proxied: bool
+
+
+@router.post("/zones/{zone_id}/records/{record_id}/proxied")
+async def set_record_proxied(zone_id: str, record_id: str, body: ProxiedRequest):
+    """Flip the proxied flag in Cloudflare AND in our managed record (if any)."""
+    await _cf().patch_dns_record(zone_id, record_id, proxied=body.proxied)
+    sess = get_session()
+    try:
+        m = sess.query(ManagedRecord).filter(ManagedRecord.record_id == record_id).first()
+        if m:
+            m.proxied = body.proxied
+            sess.commit()
+    finally:
+        sess.close()
+    return {"status": "ok", "proxied": body.proxied}
+
+
+# ---- Manual create ----
+
+class CreateRecordRequest(BaseModel):
+    name: str
+    type: str = "A"
+    content: Optional[str] = None      # if None, use current detected public IP
+    proxied: bool = False
+    ttl: int = 1
+    enable: bool = True
+
+
+@router.post("/zones/{zone_id}/records")
+async def create_record(zone_id: str, body: CreateRecordRequest, request: Request):
+    zones = await _cf().list_zones()
+    zone = next((z for z in zones if z["id"] == zone_id), None)
+    if not zone:
+        raise HTTPException(404, "Zone not found")
+
+    # If name is bare label, qualify it with zone
+    name = body.name.strip()
+    if name and not name.endswith(zone["name"]):
+        name = f"{name}.{zone['name']}"
+
+    content = (body.content or "").strip()
+    if not content:
+        engine = getattr(request.app.state, "engine", None)
+        content = (engine.current_ip if engine else None) or ""
+        if not content:
+            # last resort: probe right now
+            if engine:
+                content = await engine.get_current_ip() or ""
+        if not content:
+            raise HTTPException(400, "No content provided and public IP unknown")
+
+    try:
+        created = await _cf().create_dns_record(
+            zone_id=zone_id, name=name, ip=content,
+            record_type=body.type, proxied=body.proxied, ttl=body.ttl,
+        )
+    except Exception as e:
+        raise HTTPException(400, f"Cloudflare create failed: {e}")
+    rec = created.get("result", created)
+
+    if body.enable:
+        sess = get_session()
+        try:
+            sess.add(
+                ManagedRecord(
+                    zone_id=zone_id,
+                    zone_name=zone["name"],
+                    record_id=rec["id"],
+                    record_name=rec["name"],
+                    record_type=rec["type"],
+                    enabled=True,
+                    proxied=bool(rec.get("proxied", body.proxied)),
+                    ttl=int(rec.get("ttl", body.ttl)),
+                    source="manual",
+                )
+            )
+            sess.commit()
+        finally:
+            sess.close()
+    return {"status": "ok", "record": rec}
+
+
 # ---- Discovered hosts ----
 
 @router.get("/discovered")
@@ -132,6 +264,67 @@ async def discovered():
         sess.close()
 
 
+# ---- Verify / Check Now ----
+
+@router.post("/verify")
+async def verify_now(request: Request):
+    engine = getattr(request.app.state, "engine", None)
+    if not engine:
+        raise HTTPException(503, "Engine not running")
+    return await engine.verify_all()
+
+
+# ---- Settings ----
+
+@router.get("/settings")
+async def get_settings():
+    """Return the full settings view: effective value + whether env-locked."""
+    locked = env_locked()
+    sess = get_session()
+    try:
+        rows = {s.key: s.value for s in sess.query(Setting).all()}
+    finally:
+        sess.close()
+    out = {}
+    for key in RUNTIME_SETTINGS_KEYS:
+        value = get_effective(key, rows.get(key))
+        # Mask the token in the response
+        display = value
+        if key == "cf_api_token" and value:
+            display = f"{str(value)[:4]}…{str(value)[-4:]}" if len(str(value)) > 8 else "set"
+        out[key] = {
+            "value": display,
+            "raw_set": bool(rows.get(key)),
+            "env_locked": key in locked,
+        }
+    return out
+
+
+class SettingUpdateRequest(BaseModel):
+    key: str
+    value: str
+
+
+@router.post("/settings")
+async def update_setting(body: SettingUpdateRequest):
+    if body.key not in RUNTIME_SETTINGS_KEYS:
+        raise HTTPException(400, f"Unknown setting: {body.key}")
+    if body.key in env_locked():
+        raise HTTPException(409, f"Setting {body.key} is pinned by env / ConfigMap and cannot be edited via UI")
+    sess = get_session()
+    try:
+        existing = sess.query(Setting).filter(Setting.key == body.key).first()
+        if existing:
+            existing.value = body.value
+            existing.updated_at = datetime.utcnow()
+        else:
+            sess.add(Setting(key=body.key, value=body.value))
+        sess.commit()
+    finally:
+        sess.close()
+    return {"status": "ok"}
+
+
 # ---- Engine status ----
 
 @router.get("/status")
@@ -150,4 +343,5 @@ async def engine_status(request: Request):
         "last_error": engine.last_error if engine else None,
         "managed_records": managed_count,
         "enabled_records": enabled_count,
+        "auth_mode": settings.auth_mode,
     }

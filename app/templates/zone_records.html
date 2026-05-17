@@ -1,14 +1,38 @@
 {% extends "base.html" %}
 {% block title %}{{ zone_name }} – Cloudflare DDNS{% endblock %}
 {% block content %}
-<div class="mb-6 flex items-center justify-between">
+<div class="mb-6 flex items-center justify-between gap-4 flex-wrap">
   <div>
     <a href="/" class="text-sm text-zinc-400 hover:text-white">← Back to zones</a>
     <h1 class="text-2xl font-semibold mt-1">{{ zone_name }}</h1>
     <div class="text-xs text-zinc-500 font-mono">{{ zone_id }}</div>
   </div>
-  <button onclick="loadRecords()" class="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">↻ Refresh</button>
+  <div class="flex items-center gap-2">
+    <button onclick="checkNow()" id="check-btn"
+            class="text-sm px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-500">✓ Check now</button>
+    <button onclick="loadRecords()" class="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700">↻ Refresh</button>
+  </div>
 </div>
+
+<!-- Add record form -->
+<section class="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-6">
+  <details>
+    <summary class="cursor-pointer text-sm font-semibold text-zinc-200">+ Add record manually</summary>
+    <form onsubmit="addRecord(event)" class="mt-3 grid md:grid-cols-6 gap-2 text-sm">
+      <input id="add-name" placeholder="subdomain or full name" required
+             class="md:col-span-2 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 font-mono"/>
+      <select id="add-type" class="bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5">
+        <option>A</option><option>AAAA</option>
+      </select>
+      <input id="add-content" placeholder="leave blank → current public IP"
+             class="md:col-span-2 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 font-mono"/>
+      <label class="inline-flex items-center gap-2 text-zinc-300">
+        <input type="checkbox" id="add-proxied" class="accent-orange-400"/> Proxied
+      </label>
+      <button type="submit" class="md:col-span-6 mt-2 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 self-start w-fit">Create</button>
+    </form>
+  </details>
+</section>
 
 <section class="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
   <table class="w-full text-sm">
@@ -28,8 +52,21 @@
   </table>
 </section>
 
+<!-- Toast -->
+<div id="toast" class="fixed bottom-6 right-6 hidden bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 shadow-xl text-sm"></div>
+
 <script>
 const ZONE = "{{ zone_id }}";
+const ZONE_NAME = "{{ zone_name }}";
+
+function showToast(msg, color="emerald") {
+  const t = document.getElementById('toast');
+  t.className = `fixed bottom-6 right-6 bg-zinc-800 border border-${color}-500/40 rounded-xl px-4 py-3 shadow-xl text-sm`;
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 5000);
+}
+
 async function loadRecords() {
   const tbody = document.getElementById('rows');
   tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-zinc-500">Loading…</td></tr>';
@@ -38,43 +75,129 @@ async function loadRecords() {
     if (!r.ok) throw new Error(await r.text());
     const rows = await r.json();
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-zinc-500">No A/AAAA records in this zone.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-zinc-500">No A/AAAA records or discovered hosts for this zone.</td></tr>';
       return;
     }
     tbody.innerHTML = '';
     rows.forEach(rec => {
       const tr = document.createElement('tr');
+      tr.className = rec.exists_in_cf ? '' : 'bg-amber-500/5';
+      let manage;
+      if (rec.exists_in_cf) {
+        manage = `<input type="checkbox" ${rec.enabled ? 'checked' : ''} class="accent-emerald-500" onchange="toggleRow(this, '${rec.id}')"/>`;
+      } else {
+        manage = `<button class="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500"
+                          onclick="createFromDiscovered('${rec.name}')">Create</button>`;
+      }
+      let proxied;
+      if (rec.exists_in_cf) {
+        const icon = rec.proxied ? '☁️' : '○';
+        proxied = `<button onclick="toggleProxied('${rec.id}', ${rec.proxied})" class="hover:opacity-70" title="${rec.proxied ? 'Proxied — click to make direct' : 'Direct — click to proxy'}">${icon}</button>`;
+      } else {
+        proxied = `<span class="text-zinc-600">—</span>`;
+      }
+      const sourceBadge = rec.source
+        ? `<span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${rec.source}</span>`
+        : '<span class="text-zinc-600 text-xs">—</span>';
       tr.innerHTML = `
-        <td class="px-4 py-2">
-          <label class="inline-flex items-center cursor-pointer">
-            <input type="checkbox" ${rec.enabled ? 'checked' : ''} class="accent-emerald-500" onchange="toggleRow(this, '${rec.id}')"/>
-          </label>
-        </td>
-        <td class="px-4 py-2 font-mono">${rec.name}</td>
+        <td class="px-4 py-2">${manage}</td>
+        <td class="px-4 py-2 font-mono">${rec.name}${rec.exists_in_cf ? '' : ' <span class="text-amber-400 text-xs ml-1">(no CF record)</span>'}</td>
         <td class="px-4 py-2"><span class="px-2 py-0.5 rounded bg-zinc-800 text-xs">${rec.type}</span></td>
-        <td class="px-4 py-2 font-mono text-zinc-400">${rec.content || ''}</td>
-        <td class="px-4 py-2">${rec.proxied ? '☁️' : '○'}</td>
-        <td class="px-4 py-2 text-xs text-zinc-400">${rec.source || '-'}</td>`;
+        <td class="px-4 py-2 font-mono text-zinc-400">${rec.content || '—'}</td>
+        <td class="px-4 py-2">${proxied}</td>
+        <td class="px-4 py-2 text-xs text-zinc-400">${sourceBadge}</td>`;
       tbody.appendChild(tr);
     });
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-6 text-red-400">Failed: ${e.message}</td></tr>`;
   }
 }
+
 async function toggleRow(checkbox, recordId) {
   const enabled = checkbox.checked;
   try {
     const r = await fetch(`/api/zones/${ZONE}/records/${recordId}/toggle`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({enabled}),
     });
     if (!r.ok) throw new Error(await r.text());
   } catch (e) {
-    alert('Toggle failed: ' + e.message);
+    showToast('Toggle failed: ' + e.message, 'red');
     checkbox.checked = !enabled;
   }
 }
+
+async function toggleProxied(recordId, current) {
+  try {
+    const r = await fetch(`/api/zones/${ZONE}/records/${recordId}/proxied`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({proxied: !current}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast(`Proxied → ${!current ? 'ON ☁️' : 'OFF ○'}`);
+    loadRecords();
+  } catch (e) {
+    showToast('Proxy toggle failed: ' + e.message, 'red');
+  }
+}
+
+async function createFromDiscovered(name) {
+  if (!confirm(`Create CF A record for ${name} at current public IP?`)) return;
+  try {
+    const r = await fetch(`/api/zones/${ZONE}/records`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, type: 'A', proxied: false, enable: true}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast(`Created ${name}`);
+    loadRecords();
+  } catch (e) {
+    showToast('Create failed: ' + e.message, 'red');
+  }
+}
+
+async function addRecord(ev) {
+  ev.preventDefault();
+  const body = {
+    name: document.getElementById('add-name').value,
+    type: document.getElementById('add-type').value,
+    content: document.getElementById('add-content').value,
+    proxied: document.getElementById('add-proxied').checked,
+    enable: true,
+  };
+  try {
+    const r = await fetch(`/api/zones/${ZONE}/records`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast(`Created ${body.name}`);
+    document.getElementById('add-name').value = '';
+    document.getElementById('add-content').value = '';
+    document.getElementById('add-proxied').checked = false;
+    loadRecords();
+  } catch (e) {
+    showToast('Add failed: ' + e.message, 'red');
+  }
+}
+
+async function checkNow() {
+  const btn = document.getElementById('check-btn');
+  btn.disabled = true; btn.textContent = '⏳ Checking…';
+  try {
+    const r = await fetch('/api/verify', {method: 'POST'});
+    if (!r.ok) throw new Error(await r.text());
+    const s = await r.json();
+    const color = s.errors ? 'red' : 'emerald';
+    showToast(`${s.checked} checked · ${s.in_sync} in sync · ${s.updated} updated · ${s.errors} errors`, color);
+    loadRecords();
+  } catch (e) {
+    showToast('Check failed: ' + e.message, 'red');
+  } finally {
+    btn.disabled = false; btn.textContent = '✓ Check now';
+  }
+}
+
 loadRecords();
 </script>
 {% endblock %}

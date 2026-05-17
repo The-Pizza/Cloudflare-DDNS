@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Settings – Cloudflare DDNS{% endblock %}
+{% block content %}
+<div class="mb-6 flex items-center justify-between">
+  <div>
+    <h1 class="text-2xl font-semibold">Settings</h1>
+    <p class="text-zinc-400 text-sm mt-1">
+      Edit runtime configuration. Fields shown with a
+      <span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-xs">env-locked</span>
+      badge are pinned by environment / ConfigMap and cannot be changed here.
+    </p>
+  </div>
+  <button onclick="checkNow()" id="check-btn"
+          class="text-sm px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-500">✓ Check all records now</button>
+</div>
+
+<section class="bg-zinc-900 border border-zinc-800 rounded-2xl divide-y divide-zinc-800" id="settings-container">
+  <div class="p-6 text-zinc-500 text-sm">Loading…</div>
+</section>
+
+<div id="toast" class="fixed bottom-6 right-6 hidden bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 shadow-xl text-sm"></div>
+
+<script>
+function showToast(msg, color="emerald") {
+  const t = document.getElementById('toast');
+  t.className = `fixed bottom-6 right-6 bg-zinc-800 border border-${color}-500/40 rounded-xl px-4 py-3 shadow-xl text-sm`;
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 5000);
+}
+
+const FIELD_META = {
+  cf_api_token:           {label: 'Cloudflare API Token',   type: 'password', help: 'Scoped to zones you want to manage. Shown masked.'},
+  ipv4_endpoint:          {label: 'IPv4 detect endpoint',   type: 'text',     help: 'Returns plain text IP. Default: https://ipinfo.io/ip'},
+  ipv6_endpoint:          {label: 'IPv6 detect endpoint',   type: 'text',     help: 'Leave blank to disable AAAA management.'},
+  poll_interval_seconds:  {label: 'Poll interval (s)',      type: 'number',   help: 'How often the engine checks for IP changes.'},
+  default_proxied:        {label: 'Default proxied',        type: 'bool',     help: 'New records added via UI default to this proxied state.'},
+  default_ttl:            {label: 'Default TTL',            type: 'number',   help: '1 = automatic (Cloudflare-managed).'},
+  annotation_key:         {label: 'K8s annotation key',     type: 'text',     help: 'Workloads with this annotation get auto-discovered.'},
+  auth_mode:              {label: 'Auth mode',              type: 'select',   options: ['none', 'forward-auth'],
+                           help: 'forward-auth = Authentik in front. Switch only after applying the matching Ingress middleware.'},
+};
+
+async function loadSettings() {
+  const container = document.getElementById('settings-container');
+  try {
+    const r = await fetch('/api/settings');
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    container.innerHTML = '';
+    for (const [key, info] of Object.entries(data)) {
+      const meta = FIELD_META[key] || {label: key, type: 'text', help: ''};
+      const locked = info.env_locked;
+      const row = document.createElement('div');
+      row.className = 'px-6 py-4 grid md:grid-cols-3 gap-4 items-center';
+      let input;
+      if (meta.type === 'bool') {
+        input = `<input type="checkbox" id="f-${key}" ${(info.value === true || info.value === 'True' || info.value === 'true') ? 'checked' : ''} ${locked ? 'disabled' : ''} class="accent-emerald-500 h-5 w-5"/>`;
+      } else if (meta.type === 'select') {
+        input = `<select id="f-${key}" ${locked ? 'disabled' : ''} class="bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm w-full ${locked ? 'opacity-50' : ''}">
+          ${meta.options.map(o => `<option ${String(info.value) === o ? 'selected' : ''}>${o}</option>`).join('')}
+        </select>`;
+      } else {
+        input = `<input id="f-${key}" type="${meta.type}" value="${info.value === null ? '' : String(info.value).replace(/"/g,'&quot;')}" ${locked ? 'disabled' : ''} class="bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm w-full font-mono ${locked ? 'opacity-50' : ''}"/>`;
+      }
+      row.innerHTML = `
+        <div>
+          <div class="font-medium flex items-center gap-2">
+            ${meta.label}
+            ${locked ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-xs">env-locked</span>' : ''}
+          </div>
+          <div class="text-xs text-zinc-500 mt-0.5">${meta.help}</div>
+          <div class="text-xs text-zinc-600 mt-0.5 font-mono">${key}</div>
+        </div>
+        <div class="md:col-span-2 flex gap-2 items-center">
+          ${input}
+          <button onclick="saveSetting('${key}', '${meta.type}')" ${locked ? 'disabled' : ''}
+            class="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-sm ${locked ? 'opacity-30 cursor-not-allowed' : ''}">Save</button>
+        </div>`;
+      container.appendChild(row);
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="p-6 text-red-400 text-sm">Failed: ${e.message}</div>`;
+  }
+}
+
+async function saveSetting(key, type) {
+  const el = document.getElementById(`f-${key}`);
+  let value;
+  if (type === 'bool') value = el.checked ? 'true' : 'false';
+  else value = el.value;
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, value}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast(`Saved ${key}`);
+  } catch (e) {
+    showToast('Save failed: ' + e.message, 'red');
+  }
+}
+
+async function checkNow() {
+  const btn = document.getElementById('check-btn');
+  btn.disabled = true; btn.textContent = '⏳ Checking…';
+  try {
+    const r = await fetch('/api/verify', {method: 'POST'});
+    if (!r.ok) throw new Error(await r.text());
+    const s = await r.json();
+    showToast(`${s.checked} checked · ${s.in_sync} in sync · ${s.updated} updated · ${s.errors} errors`, s.errors ? 'red' : 'emerald');
+  } catch (e) {
+    showToast('Check failed: ' + e.message, 'red');
+  } finally {
+    btn.disabled = false; btn.textContent = '✓ Check all records now';
+  }
+}
+
+loadSettings();
+</script>
+{% endblock %}

@@ -148,6 +148,71 @@ class DDNSEngine:
 
         self.last_update = datetime.utcnow()
 
+    async def verify_all(self) -> dict:
+        """One-shot validation pass over every enabled ManagedRecord.
+
+        Returns counts the UI can show as a toast:
+            {checked, in_sync, updated, errors, ip}
+        """
+        ip = await self.get_current_ip()
+        result = {"checked": 0, "in_sync": 0, "updated": 0, "errors": 0, "ip": ip}
+        if not ip:
+            result["errors"] = 1
+            return result
+        self.current_ip = ip
+
+        # Snapshot enabled records
+        sess = get_session()
+        try:
+            records = list(sess.query(ManagedRecord).filter(ManagedRecord.enabled == True).all())  # noqa: E712
+        finally:
+            sess.close()
+
+        # Cache CF state by zone so we only pull once per zone
+        zone_cache: dict = {}
+
+        for rec in records:
+            result["checked"] += 1
+            try:
+                if rec.zone_id not in zone_cache:
+                    zone_cache[rec.zone_id] = {
+                        r["id"]: r for r in await self.cf.list_dns_records(rec.zone_id)
+                    }
+                cf_rec = zone_cache[rec.zone_id].get(rec.record_id)
+                if not cf_rec:
+                    result["errors"] += 1
+                    log.warning("verify: record %s not in CF anymore", rec.record_name)
+                    continue
+                desired_drift = (
+                    cf_rec.get("content") != ip
+                    or bool(cf_rec.get("proxied")) != bool(rec.proxied)
+                    or int(cf_rec.get("ttl", 1)) != int(rec.ttl)
+                )
+                if not desired_drift:
+                    result["in_sync"] += 1
+                    continue
+                await self.cf.update_dns_record(
+                    rec.zone_id, rec.record_id, rec.record_name,
+                    ip, rec.record_type, rec.proxied, rec.ttl,
+                )
+                s = get_session()
+                try:
+                    fresh = s.get(ManagedRecord, rec.id)
+                    if fresh:
+                        fresh.last_ip = ip
+                        fresh.last_updated = datetime.utcnow()
+                        s.commit()
+                finally:
+                    s.close()
+                result["updated"] += 1
+                log.info("verify: updated %s -> %s", rec.record_name, ip)
+            except Exception as e:
+                log.warning("verify: %s failed: %s", rec.record_name, e)
+                result["errors"] += 1
+                self.last_error = str(e)
+        self.last_update = datetime.utcnow()
+        return result
+
     async def start_background_task(self) -> None:
         # Best-effort legacy import once
         try:

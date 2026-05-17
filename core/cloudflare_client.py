@@ -49,6 +49,20 @@ class CloudflareClient:
             raise CloudflareError(f"POST {path} -> {r.status_code}: {r.text}")
         return r.json()
 
+    async def _patch(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
+            r = await cli.patch(f"{self.base_url}{path}", headers=self._headers(), json=body)
+        if r.status_code >= 400:
+            raise CloudflareError(f"PATCH {path} -> {r.status_code}: {r.text}")
+        return r.json()
+
+    async def _delete(self, path: str) -> Dict[str, Any]:
+        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
+            r = await cli.delete(f"{self.base_url}{path}", headers=self._headers())
+        if r.status_code >= 400:
+            raise CloudflareError(f"DELETE {path} -> {r.status_code}: {r.text}")
+        return r.json()
+
     # ---- High-level ----
 
     async def list_zones(self) -> List[Dict[str, Any]]:
@@ -102,3 +116,15 @@ class CloudflareClient:
     ) -> Dict[str, Any]:
         body = {"type": record_type, "name": name, "content": ip, "proxied": proxied, "ttl": ttl}
         return await self._post(f"/zones/{zone_id}/dns_records", body)
+
+    async def patch_dns_record(
+        self,
+        zone_id: str,
+        record_id: str,
+        **fields,
+    ) -> Dict[str, Any]:
+        """Partial update — pass only the fields you want changed (proxied, ttl, name, content, type)."""
+        return await self._patch(f"/zones/{zone_id}/dns_records/{record_id}", fields)
+
+    async def delete_dns_record(self, zone_id: str, record_id: str) -> Dict[str, Any]:
+        return await self._delete(f"/zones/{zone_id}/dns_records/{record_id}")
