@@ -4,15 +4,15 @@ metadata:
   name: cloudflare-ddns-ui
   namespace: cloudflare-ddns
   annotations:
-    cloudflare-ddns.witschger.home/dns-name: "ddns.witschger.net"
+    cloudflare-ddns.witschger.home/dns-name: "ddns.witschger.home"
 spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`ddns.witschger.net`)
+    - match: Host(`ddns.witschger.home`)
       kind: Rule
       services:
         - name: cloudflare-ddns
           port: 8080
   tls:
-    secretName: witschger-net-tls
+    secretName: witschger-home-tls
