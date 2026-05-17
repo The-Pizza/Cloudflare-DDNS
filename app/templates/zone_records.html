@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Records - {{ zone_name }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-zinc-950 text-zinc-200">
+<div class="max-w-6xl mx-auto p-8">
+    <a href="/" class="text-sm">← Back</a>
+    <h1 class="text-2xl mt-2 mb-6">{{ zone_name }}</h1>
+    
+    <div id="records" class="bg-zinc-900 rounded-2xl border border-zinc-800"></div>
+</div>
+
+<script>
+const zoneId = "{{ zone_id }}";
+
+async function loadRecords() {
+    const res = await fetch(`/api/zones/${zoneId}/records`);
+    const records = await res.json();
+    const container = document.getElementById('records');
+    container.innerHTML = '<table class="w-full"><tbody></tbody></table>';
+    const tbody = container.querySelector('tbody');
+    
+    records.forEach(r => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-zinc-800';
+        row.innerHTML = `
+            <td class="p-4"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggle('${r.id}', this.checked)"></td>
+            <td class="p-4 font-mono">${r.name}</td>
+            <td class="p-4">${r.type}</td>
+            <td class="p-4 text-zinc-400">${r.content || ''}</td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+async function toggle(recordId, enabled) {
+    await fetch(`/api/records/${recordId}/toggle`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled})
+    });
+}
+
+loadRecords();
+</script>
+</body>
+</html>
