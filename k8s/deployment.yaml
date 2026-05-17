@@ -21,17 +21,26 @@ spec:
     spec:
       containers:
         - name: cloudflare-ddns
-          image: ghcr.io/the-pizza/cloudflare-ddns:v0.3.0
+          image: ghcr.io/the-pizza/cloudflare-ddns:0.3.0
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http
           env:
-            - name: CFDDNS_CLOUDFLARE_API_TOKEN
+            - name: CF_API_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: cloudflare-ddns-secret
                   key: CF_API_TOKEN
+            - name: CONFIG_PATH
+              value: /etc/config/records.json
+          envFrom:
+            - configMapRef:
+                name: cloudflare-ddns-settings
+          volumeMounts:
+            - name: records
+              mountPath: /etc/config
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -51,3 +60,8 @@ spec:
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
+      volumes:
+        - name: records
+          configMap:
+            name: cloudflare-ddns-config
+            defaultMode: 292
