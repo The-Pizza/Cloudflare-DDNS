@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-06-02
+
+### Fixed
+- **Container crash-on-startup regression in 0.7.0**. The 0.7.0 image
+  was built on `python:3.14-slim`, but SQLModel 0.0.22 + Pydantic 2 fail
+  to construct table models on Python 3.14 (PEP 649 deferred annotations
+  break SQLModel's metaclass — `Field 'id' requires a type annotation`).
+  The image built fine but crash-looped at runtime. Base image is now
+  pinned to `python:3.13-slim`.
+
+### Added
+- **Build-time import smoke test** in the Dockerfile: the build now
+  imports `app.main` and fails if the app can't start, so runtime-only
+  breakage (like the 3.14 issue above) is caught at build time instead
+  of in production.
+- Dependabot is configured to ignore Python base-image bumps `>=3.14`
+  until SQLModel supports it.
+
 ## [0.7.0] - 2026-06-02
 
 ### Changed
