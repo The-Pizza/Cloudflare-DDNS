@@ -17,6 +17,7 @@ from core.cloudflare_client import CloudflareClient
 from core.config import settings
 from core.database import get_session
 from core.models import IpHistoryEntry, ManagedRecord
+from core import metrics
 
 log = logging.getLogger("cfddns.engine")
 
@@ -24,7 +25,8 @@ log = logging.getLogger("cfddns.engine")
 class DDNSEngine:
     def __init__(self):
         self.cf = CloudflareClient()
-        self.current_ip: Optional[str] = None
+        self.current_ip: Optional[str] = None        # IPv4 (kept for backward-compat / UI)
+        self.current_ipv6: Optional[str] = None       # IPv6 (None if disabled / undetected)
         self.last_update: Optional[datetime] = None
         self.last_error: Optional[str] = None
 
@@ -41,16 +43,45 @@ class DDNSEngine:
         except Exception as e:
             log.warning("Failed to record IP history (%s -> %s): %s", previous_ip, new_ip, e)
 
-    async def get_current_ip(self) -> Optional[str]:
+    async def _detect(self, endpoint: str) -> Optional[str]:
+        """Fetch a plain-text IP from an endpoint. Returns None on any failure."""
+        if not endpoint:
+            return None
+        family = "ipv6" if endpoint == settings.ipv6_endpoint else "ipv4"
         try:
             async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
-                r = await cli.get(settings.ipv4_endpoint)
+                r = await cli.get(endpoint)
                 r.raise_for_status()
                 return r.text.strip()
         except Exception as e:
-            log.warning("Failed to detect public IP: %s", e)
+            log.warning("Failed to detect IP from %s: %s", endpoint, e)
             self.last_error = f"ip-detect: {e}"
+            metrics.IP_DETECT_FAILURES.labels(family=family).inc()
             return None
+
+    async def get_current_ip(self) -> Optional[str]:
+        """Detect the public IPv4 address (back-compat alias)."""
+        return await self._detect(settings.ipv4_endpoint)
+
+    async def get_current_ipv6(self) -> Optional[str]:
+        """Detect the public IPv6 address. Returns None when ipv6_endpoint is
+        blank (AAAA management disabled) or detection fails."""
+        return await self._detect(settings.ipv6_endpoint)
+
+    @staticmethod
+    def _ip_for_type(record_type: str, ipv4: Optional[str], ipv6: Optional[str]) -> Optional[str]:
+        """Map a DNS record type to the matching address family.
+
+        A    -> IPv4
+        AAAA -> IPv6
+        anything else -> None (we don't manage it)
+        """
+        rt = (record_type or "").upper()
+        if rt == "A":
+            return ipv4
+        if rt == "AAAA":
+            return ipv6
+        return None
 
     async def import_legacy_config(self) -> int:
         """One-shot: import records.json into the DB if present."""
@@ -122,14 +153,25 @@ class DDNSEngine:
             sess.close()
 
     async def run_once(self) -> None:
-        ip = await self.get_current_ip()
-        if not ip:
+        ipv4 = await self.get_current_ip()
+        ipv6 = await self.get_current_ipv6()
+        if not ipv4 and not ipv6:
             return
 
-        if ip != self.current_ip:
-            log.info("Public IPv4 changed: %s -> %s", self.current_ip, ip)
-            self._record_ip_change(self.current_ip, ip, "ip-change" if self.current_ip else "boot")
-            self.current_ip = ip
+        if ipv4 and ipv4 != self.current_ip:
+            log.info("Public IPv4 changed: %s -> %s", self.current_ip, ipv4)
+            self._record_ip_change(self.current_ip, ipv4, "ip-change" if self.current_ip else "boot")
+            self.current_ip = ipv4
+            metrics.IP_CHANGES.labels(family="ipv4").inc()
+        if ipv4:
+            metrics.set_current_ip("ipv4", ipv4)
+        if ipv6 and ipv6 != self.current_ipv6:
+            log.info("Public IPv6 changed: %s -> %s", self.current_ipv6, ipv6)
+            self._record_ip_change(self.current_ipv6, ipv6, "ipv6-change" if self.current_ipv6 else "boot-ipv6")
+            self.current_ipv6 = ipv6
+            metrics.IP_CHANGES.labels(family="ipv6").inc()
+        if ipv6:
+            metrics.set_current_ip("ipv6", ipv6)
 
         sess = get_session()
         try:
@@ -138,42 +180,56 @@ class DDNSEngine:
             sess.close()
 
         for rec in records:
-            if rec.last_ip == ip:
+            target_ip = self._ip_for_type(rec.record_type, ipv4, ipv6)
+            if not target_ip:
+                # AAAA record but no IPv6 detected (or unmanaged type) — skip,
+                # never write an IPv4 into an AAAA record.
+                if (rec.record_type or "").upper() == "AAAA" and not ipv6:
+                    log.debug("Skipping AAAA %s: no IPv6 detected (ipv6_endpoint set?)", rec.record_name)
+                continue
+            if rec.last_ip == target_ip:
                 continue
             try:
                 await self.cf.update_dns_record(
                     rec.zone_id, rec.record_id, rec.record_name,
-                    ip, rec.record_type, rec.proxied, rec.ttl,
+                    target_ip, rec.record_type, rec.proxied, rec.ttl,
                 )
                 # commit the update on the record
                 s = get_session()
                 try:
                     fresh = s.get(ManagedRecord, rec.id)
                     if fresh:
-                        fresh.last_ip = ip
+                        fresh.last_ip = target_ip
                         fresh.last_updated = datetime.utcnow()
                         s.commit()
                 finally:
                     s.close()
-                log.info("Updated %s -> %s", rec.record_name, ip)
+                log.info("Updated %s (%s) -> %s", rec.record_name, rec.record_type, target_ip)
+                metrics.RECORD_UPDATES.labels(record_type=(rec.record_type or "A").upper()).inc()
             except Exception as e:
                 log.warning("Failed updating %s: %s", rec.record_name, e)
                 self.last_error = str(e)
+                metrics.RECORD_UPDATE_ERRORS.labels(record_type=(rec.record_type or "A").upper()).inc()
 
         self.last_update = datetime.utcnow()
+        metrics.LAST_RUN_TIMESTAMP.set(self.last_update.timestamp())
 
     async def verify_all(self) -> dict:
         """One-shot validation pass over every enabled ManagedRecord.
 
         Returns counts the UI can show as a toast:
-            {checked, in_sync, updated, errors, ip}
+            {checked, in_sync, updated, errors, ip, ipv6}
         """
-        ip = await self.get_current_ip()
-        result = {"checked": 0, "in_sync": 0, "updated": 0, "errors": 0, "ip": ip}
-        if not ip:
+        ipv4 = await self.get_current_ip()
+        ipv6 = await self.get_current_ipv6()
+        result = {"checked": 0, "in_sync": 0, "updated": 0, "errors": 0, "ip": ipv4, "ipv6": ipv6}
+        if not ipv4 and not ipv6:
             result["errors"] = 1
             return result
-        self.current_ip = ip
+        if ipv4:
+            self.current_ip = ipv4
+        if ipv6:
+            self.current_ipv6 = ipv6
 
         # Snapshot enabled records
         sess = get_session()
@@ -187,6 +243,12 @@ class DDNSEngine:
 
         for rec in records:
             result["checked"] += 1
+            target_ip = self._ip_for_type(rec.record_type, ipv4, ipv6)
+            if not target_ip:
+                # AAAA with no IPv6 available (or unmanaged type): can't verify,
+                # but it isn't an error caused by us — count as in_sync (no-op).
+                result["in_sync"] += 1
+                continue
             try:
                 if rec.zone_id not in zone_cache:
                     zone_cache[rec.zone_id] = {
@@ -202,7 +264,7 @@ class DDNSEngine:
                     result["in_sync"] += 1
                     continue
                 desired_drift = (
-                    cf_rec.get("content") != ip
+                    cf_rec.get("content") != target_ip
                     or bool(cf_rec.get("proxied")) != bool(rec.proxied)
                     or int(cf_rec.get("ttl", 1)) != int(rec.ttl)
                 )
@@ -211,19 +273,19 @@ class DDNSEngine:
                     continue
                 await self.cf.update_dns_record(
                     rec.zone_id, rec.record_id, rec.record_name,
-                    ip, rec.record_type, rec.proxied, rec.ttl,
+                    target_ip, rec.record_type, rec.proxied, rec.ttl,
                 )
                 s = get_session()
                 try:
                     fresh = s.get(ManagedRecord, rec.id)
                     if fresh:
-                        fresh.last_ip = ip
+                        fresh.last_ip = target_ip
                         fresh.last_updated = datetime.utcnow()
                         s.commit()
                 finally:
                     s.close()
                 result["updated"] += 1
-                log.info("verify: updated %s -> %s", rec.record_name, ip)
+                log.info("verify: updated %s (%s) -> %s", rec.record_name, rec.record_type, target_ip)
             except Exception as e:
                 log.warning("verify: %s failed: %s", rec.record_name, e)
                 result["errors"] += 1

@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # Random string for signing the session cookie. Auto-generated on startup if blank.
     session_secret: str = ""
     session_cookie_name: str = "cfddns_session"
+    # Set the Secure flag on the session cookie (cookie only sent over HTTPS).
+    # Defaults to True because the app is intended to run behind TLS; set to
+    # False only for local HTTP development.
+    session_cookie_secure: bool = True
     session_max_age_seconds: int = 60 * 60 * 8        # 8h
 
     # ---- Forward-auth (auth_mode=forward-auth) ----
@@ -124,6 +128,7 @@ RUNTIME_SETTINGS_KEYS = (
     "forward_auth_email_header",
     "forward_auth_groups_header",
     "forward_auth_groups_separator",
+    "session_cookie_secure",
 )
 
 SECRET_KEYS = {"cf_api_token", "oidc_client_secret", "session_secret"}

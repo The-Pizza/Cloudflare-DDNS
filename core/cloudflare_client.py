@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from core.config import settings
+from core import metrics
 
 log = logging.getLogger("cfddns.cf")
 
@@ -28,40 +29,49 @@ class CloudflareClient:
             "Content-Type": "application/json",
         }
 
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Single entry point for all CF HTTP calls so we can count them."""
+        outcome = "error"
+        try:
+            async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
+                r = await cli.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    headers=self._headers(),
+                    params=params,
+                    json=body,
+                )
+            if r.status_code >= 400:
+                raise CloudflareError(f"{method} {path} -> {r.status_code}: {r.text}")
+            outcome = "success"
+            return r.json()
+        finally:
+            try:
+                metrics.CF_API_REQUESTS.labels(method=method.upper(), outcome=outcome).inc()
+            except Exception:
+                pass
+
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
-            r = await cli.get(f"{self.base_url}{path}", headers=self._headers(), params=params)
-        if r.status_code >= 400:
-            raise CloudflareError(f"GET {path} -> {r.status_code}: {r.text}")
-        return r.json()
+        return await self._request("GET", path, params=params)
 
     async def _put(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
-            r = await cli.put(f"{self.base_url}{path}", headers=self._headers(), json=body)
-        if r.status_code >= 400:
-            raise CloudflareError(f"PUT {path} -> {r.status_code}: {r.text}")
-        return r.json()
+        return await self._request("PUT", path, body=body)
 
     async def _post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
-            r = await cli.post(f"{self.base_url}{path}", headers=self._headers(), json=body)
-        if r.status_code >= 400:
-            raise CloudflareError(f"POST {path} -> {r.status_code}: {r.text}")
-        return r.json()
+        return await self._request("POST", path, body=body)
 
     async def _patch(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
-            r = await cli.patch(f"{self.base_url}{path}", headers=self._headers(), json=body)
-        if r.status_code >= 400:
-            raise CloudflareError(f"PATCH {path} -> {r.status_code}: {r.text}")
-        return r.json()
+        return await self._request("PATCH", path, body=body)
 
     async def _delete(self, path: str) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as cli:
-            r = await cli.delete(f"{self.base_url}{path}", headers=self._headers())
-        if r.status_code >= 400:
-            raise CloudflareError(f"DELETE {path} -> {r.status_code}: {r.text}")
-        return r.json()
+        return await self._request("DELETE", path)
 
     # ---- High-level ----
 
