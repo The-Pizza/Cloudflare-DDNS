@@ -1,6 +1,6 @@
 # Example: Annotation-driven discovery
 #
-# Adding the `cloudflare-ddns.witschger.home/dns-name` annotation
+# Adding the `cloudflare-ddns.io/dns-name` annotation
 # to ANY Service, Deployment, or Ingress causes that hostname to
 # appear in the "Discovered" tab of the Cloudflare DDNS UI.
 #
@@ -12,7 +12,7 @@ metadata:
   name: example-app
   namespace: default
   annotations:
-    cloudflare-ddns.witschger.home/dns-name: "example.witschger.net"
+    cloudflare-ddns.io/dns-name: "example.example.com"
 spec:
   replicas: 1
   selector:

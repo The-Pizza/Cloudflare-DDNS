@@ -17,7 +17,7 @@ Kubernetes-aware discovery so you can stop hand-editing `records.json`.
 * **🌐 Web UI** — Tailwind dashboard for browsing every Cloudflare zone
   on your account and toggling per-record auto-update with one click.
 * **🏷️ Annotation discovery** — Tag any `Service`, `Deployment`, or
-  `Ingress` with `cloudflare-ddns.witschger.home/dns-name: foo.example.com`
+  `Ingress` with `cloudflare-ddns.io/dns-name: foo.example.com`
   and it shows up in the **Discovered** tab.
 * **🛣️ Traefik & Ingress discovery** — Host rules from Traefik
   `IngressRoute` CRDs and standard `networking.k8s.io/v1` Ingresses are
@@ -92,7 +92,7 @@ for local dev.
 | `IMPORT_LEGACY_CONFIG` | `true` | Set `false` to skip legacy import. |
 | `ENABLE_ANNOTATION_DISCOVERY` | `true` | Scan K8s objects for `ANNOTATION_KEY`. |
 | `ENABLE_TRAEFIK_DISCOVERY` | `true` | Scan Traefik + standard Ingress. |
-| `ANNOTATION_KEY` | `cloudflare-ddns.witschger.home/dns-name` | Annotation looked up by the discovery loop. |
+| `ANNOTATION_KEY` | `cloudflare-ddns.io/dns-name` | Annotation looked up by the discovery loop. Accepts a comma-separated list to match multiple keys (e.g. during migration). |
 | `LOG_LEVEL` | `INFO` | Standard Python log level. |
 
 ## 🧪 Local development

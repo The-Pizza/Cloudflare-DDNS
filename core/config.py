@@ -34,7 +34,11 @@ class Settings(BaseSettings):
     # ---- Discovery features ----
     enable_annotation_discovery: bool = True
     enable_traefik_discovery: bool = True
-    annotation_key: str = "cloudflare-ddns.witschger.home/dns-name"
+    # Annotation(s) the discovery loop looks up on Services/Deployments/Ingresses.
+    # Accepts a single key or a comma-separated list — handy when migrating from
+    # an old annotation key to a new one: list both, re-annotate your workloads,
+    # then drop the old key. The default is a vendor-neutral domain-style key.
+    annotation_key: str = "cloudflare-ddns.io/dns-name"
 
     # ---- Legacy: read static records.json on startup, import into DB once ----
     config_path: str = "/etc/config/records.json"
@@ -81,6 +85,19 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def annotation_keys() -> list[str]:
+    """Return the configured annotation key(s) as a list.
+
+    `annotation_key` may be a single key or a comma-separated list. Discovery
+    matches a workload carrying ANY of these keys, which makes migrating from an
+    old key to a new one a non-breaking, two-step operation (list both keys,
+    re-annotate, then drop the old one). Whitespace around entries is ignored
+    and empty entries are skipped.
+    """
+    raw = get_effective("annotation_key")
+    return [k.strip() for k in str(raw).split(",") if k.strip()]
 
 # Keys exposed/editable on the Settings page. Anything in env wins.
 RUNTIME_SETTINGS_KEYS = (
