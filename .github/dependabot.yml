@@ -16,6 +16,11 @@ updates:
     labels:
       - dependencies
       - docker
+    ignore:
+      # SQLModel 0.0.22 + Pydantic 2 break on Python 3.14 (PEP 649 deferred
+      # annotations). Pin to 3.13 until SQLModel ships 3.14 support. See 0.7.1.
+      - dependency-name: "python"
+        versions: [">=3.14"]
 
   - package-ecosystem: github-actions
     directory: /
