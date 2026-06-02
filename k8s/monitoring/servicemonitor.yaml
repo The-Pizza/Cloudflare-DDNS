@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cloudflare-ddns
+  namespace: monitoring
+  labels:
+    release: prom
+spec:
+  namespaceSelector:
+    matchNames: [cloudflare-ddns]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflare-ddns
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

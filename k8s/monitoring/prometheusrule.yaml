@@ -1,0 +1,51 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cloudflare-ddns
+  namespace: monitoring
+  labels:
+    release: prom
+spec:
+  groups:
+    - name: cloudflare-ddns
+      rules:
+        - alert: CloudflareDDNSDown
+          expr: up{job="cloudflare-ddns"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Cloudflare-DDNS is not being scraped"
+            description: "Prometheus cannot scrape cloudflare-ddns (target down) for 5m."
+        - alert: CloudflareDDNSStale
+          expr: time() - ddns_last_run_timestamp_seconds > 900
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cloudflare-DDNS engine has not run recently"
+            description: "Last successful DDNS engine run was {{ $value | humanizeDuration }} ago (threshold 15m)."
+        - alert: CloudflareDDNSUpdateErrors
+          expr: increase(ddns_record_update_errors_total[15m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cloudflare-DDNS record update failures"
+            description: "{{ $value | printf \"%.0f\" }} DNS record update error(s) in the last 15m (type {{ $labels.record_type }})."
+        - alert: CloudflareDDNSIPDetectFailing
+          expr: increase(ddns_ip_detect_failures_total[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cloudflare-DDNS cannot detect public IP"
+            description: "{{ $value | printf \"%.0f\" }} public-IP detection failures ({{ $labels.family }}) in 15m."
+        - alert: CloudflareDDNSCloudflareAPIErrors
+          expr: increase(ddns_cloudflare_api_requests_total{outcome="error"}[15m]) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cloudflare API errors elevated"
+            description: "{{ $value | printf \"%.0f\" }} Cloudflare API errors in 15m (method {{ $labels.method }})."
