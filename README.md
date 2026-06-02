@@ -27,7 +27,10 @@ Kubernetes-aware discovery so you can stop hand-editing `records.json`.
 * **💾 Persistent** — SQLite on a PVC; survives upgrades, restarts and
   pod rescheduling.
 * **🪶 Lightweight** — Single container, no Helm chart, no JS bundler.
-* **🩺 Observable** — `/health/live`, `/health/ready`, JSON `/api/status`.
+* **🩺 Observable** — `/health/live`, `/health/ready` (real DB check), JSON
+  `/api/status`, and **Prometheus `/metrics`** for Grafana dashboards.
+* **🌍 IPv4 + IPv6** — manages `A` records from your public IPv4 and `AAAA`
+  records from your public IPv6 (set `IPV6_ENDPOINT` to enable).
 
 ## 🚀 Quick start (Kubernetes)
 
@@ -87,6 +90,7 @@ for local dev.
 | `POLL_INTERVAL_SECONDS` | `60` | How often to re-check the public IP and run discovery. |
 | `IPV4_ENDPOINT` | `https://ipinfo.io/ip` | Returns plain-text IPv4. |
 | `IPV6_ENDPOINT` | _(empty)_ | Set to enable AAAA updates. |
+| `SESSION_COOKIE_SECURE` | `true` | Send the auth session cookie only over HTTPS. Set `false` for local HTTP dev. |
 | `DATABASE_URL` | `sqlite:////app/data/cloudflare-ddns.db` | SQLAlchemy URL. |
 | `CONFIG_PATH` | `/etc/config/records.json` | Optional legacy file to import once. |
 | `IMPORT_LEGACY_CONFIG` | `true` | Set `false` to skip legacy import. |
@@ -126,7 +130,55 @@ podman run --rm -p 8080:8080 -e CF_API_TOKEN=cfut_xxx cloudflare-ddns:dev
 | `/api/discovered` | JSON discovered hosts |
 | `/api/status` | Engine status JSON |
 | `/health/live` `/health/ready` | Probes |
+| `/metrics` | Prometheus metrics (text exposition format) |
 | `/docs` | OpenAPI / Swagger UI |
+
+## 📊 Metrics & Grafana
+
+Prometheus-format metrics are exposed at `/metrics` (allow-listed, no auth —
+keep it on a trusted network or behind your scrape-only firewall rule).
+
+Scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: cloudflare-ddns
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["cloudflare-ddns.cloudflare-ddns.svc:8080"]
+```
+
+Or, with the Prometheus Operator, a `PodMonitor`/`ServiceMonitor` targeting the
+`cloudflare-ddns` Service on port `http`.
+
+Key series:
+
+| Metric | Type | Notes |
+| --- | --- | --- |
+| `ddns_record_updates_total{record_type}` | counter | Successful CF record writes |
+| `ddns_record_update_errors_total{record_type}` | counter | Failed writes |
+| `ddns_ip_changes_total{family}` | counter | Public IP changes (ipv4/ipv6) |
+| `ddns_cloudflare_api_requests_total{method,outcome}` | counter | CF API call volume / errors |
+| `ddns_ip_detect_failures_total{family}` | counter | Public-IP detection failures |
+| `ddns_last_run_timestamp_seconds` | gauge | Use for a freshness/staleness alert |
+| `ddns_current_ip_info{family,address}` | gauge | Current public IP (value 1) |
+| `ddns_managed_records` / `ddns_enabled_records` | gauge | DB-derived counts |
+| `ddns_discovered_hosts{source}` | gauge | Discovery results by source |
+
+Example staleness alert (no successful run in 15 min):
+
+```promql
+time() - ddns_last_run_timestamp_seconds > 900
+```
+
+## 🧪 Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The suite runs on every push/PR via the `tests` workflow (Python 3.12 + 3.13).
 
 ## 🔄 Legacy upgrade
 

@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-06-02
+
+### Added
+- **Prometheus metrics** at `/metrics` (no auth required — allow-listed so
+  Prometheus can scrape; protect at the network layer). Exposes:
+  `ddns_app_info`, `ddns_record_updates_total{record_type}`,
+  `ddns_record_update_errors_total{record_type}`,
+  `ddns_ip_changes_total{family}`, `ddns_ip_detect_failures_total{family}`,
+  `ddns_cloudflare_api_requests_total{method,outcome}`,
+  `ddns_last_run_timestamp_seconds`, `ddns_current_ip_info{family,address}`,
+  and DB-derived gauges `ddns_managed_records`, `ddns_enabled_records`,
+  `ddns_discovered_hosts{source}`, `ddns_ip_history_entries`.
+- **Real IPv6 / AAAA support**. The engine now detects the public IPv6 address
+  from `IPV6_ENDPOINT` and routes each record to the matching address family
+  (A→IPv4, AAAA→IPv6). `/api/status` gains `current_ipv6`.
+- **Unit test suite** (`pytest`, 29 tests) covering the A/AAAA routing fix,
+  JWKS validation, the session-cookie Secure flag, config/annotation parsing,
+  readiness, and metrics. New `tests` CI workflow runs them on every PR
+  (Python 3.12 + 3.13).
+- `SESSION_COOKIE_SECURE` setting (default **true**).
+
+### Fixed
+- **AAAA records no longer get an IPv4 address written into them.** Previously
+  every enabled record received the detected IPv4 regardless of type, which
+  corrupted or caused Cloudflare to reject AAAA records. (Critical.)
+- **Session cookie now sets the `Secure` flag** by default (was hard-coded
+  `secure=False`), so the auth cookie is HTTPS-only. Configurable via
+  `SESSION_COOKIE_SECURE` for local HTTP dev.
+- **OIDC `id_token` signatures are now cryptographically verified** against the
+  provider's JWKS (signature + issuer + audience + expiry) before any claims
+  are trusted for authorization. Previously claims were base64-decoded without
+  verification. (Security.)
+- **`/health/ready` now performs a real database check** and returns 503 when
+  the DB is unreachable, so Kubernetes keeps the pod out of rotation until it
+  can actually serve.
+
 ## [0.7.1] - 2026-06-02
 
 ### Fixed

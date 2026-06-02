@@ -42,6 +42,7 @@ const FIELD_META = {
   auth_mode:              {label: 'Auth mode',              type: 'select',   options: ['none', 'oidc', 'forward-auth'],
                            help: 'none = open. oidc = built-in OpenID Connect login. forward-auth = trust reverse-proxy identity headers.',
                            group: 'Authentication'},
+  session_cookie_secure:  {label: 'Secure session cookie',  type: 'bool',     help: 'Send the session cookie only over HTTPS. Keep ON in production; turn OFF only for local HTTP development.', group: 'Authentication'},
 
   oidc_issuer:            {label: 'OIDC Issuer URL',        type: 'text',     help: 'e.g. https://auth.example.com/application/o/cloudflare-ddns/ — must serve /.well-known/openid-configuration', group: 'OIDC client'},
   oidc_client_id:         {label: 'OIDC Client ID',         type: 'text',     help: 'Public client identifier from your IdP.', group: 'OIDC client'},

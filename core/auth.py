@@ -42,6 +42,7 @@ log = logging.getLogger("cfddns.auth")
 # - the login page needs to render
 ALWAYS_ALLOW_PREFIXES = (
     "/health/",
+    "/metrics",         # Prometheus scrape — no session; protect at network layer
     "/auth/",
     "/static/",
     "/api/status",      # status endpoint is harmless and used to render the footer
@@ -93,9 +94,10 @@ def _set_session_cookie(response, username: str, email: str = "", groups: Iterab
     ).decode().rstrip("=")
     token = _signer().sign(payload.encode()).decode()
     max_age = int(get_effective("session_max_age_seconds") or 28800)
+    secure = bool(get_effective("session_cookie_secure"))
     response.set_cookie(
         cookie_name, token,
-        max_age=max_age, httponly=True, samesite="lax", secure=False, path="/",
+        max_age=max_age, httponly=True, samesite="lax", secure=secure, path="/",
     )
 
 
@@ -219,6 +221,60 @@ async def _oidc_discovery(issuer: str) -> dict:
     return r.json()
 
 
+# Cache JWKS per jwks_uri so we don't refetch the IdP's keys on every login.
+_jwks_cache: dict = {}  # jwks_uri -> {"keys": [...]}
+
+
+async def _fetch_jwks(jwks_uri: str) -> dict:
+    if jwks_uri in _jwks_cache:
+        return _jwks_cache[jwks_uri]
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as cli:
+        r = await cli.get(jwks_uri)
+    r.raise_for_status()
+    jwks = r.json()
+    _jwks_cache[jwks_uri] = jwks
+    return jwks
+
+
+async def _verify_id_token(id_token: str, meta: dict, client_id: str) -> dict:
+    """Verify an OIDC id_token's signature and standard claims via the IdP's JWKS.
+
+    Validates signature (against the provider's published keys), issuer, audience
+    (must include our client_id) and expiry. Raises on any failure — the caller
+    treats an exception as an authentication failure. Returns the verified claims.
+
+    On a JWKS miss (e.g. the IdP rotated keys), the cache is refreshed once and
+    validation retried before giving up.
+    """
+    from authlib.jose import jwt as jose_jwt
+    from authlib.jose.errors import JoseError
+
+    jwks_uri = meta.get("jwks_uri")
+    if not jwks_uri:
+        raise ValueError("OIDC provider metadata has no jwks_uri; cannot verify id_token")
+    issuer = meta.get("issuer")
+
+    claims_options = {
+        "iss": {"essential": True, "value": issuer} if issuer else {"essential": False},
+        "aud": {"essential": True, "value": client_id},
+        "exp": {"essential": True},
+    }
+
+    last_err: Optional[Exception] = None
+    for attempt in range(2):
+        jwks = await _fetch_jwks(jwks_uri)
+        try:
+            claims = jose_jwt.decode(id_token, jwks, claims_options=claims_options)
+            claims.validate()   # checks exp / iss / aud per claims_options
+            return dict(claims)
+        except JoseError as e:
+            last_err = e
+            # Possible key rotation — bust cache and retry once.
+            _jwks_cache.pop(jwks_uri, None)
+    raise last_err or ValueError("id_token validation failed")
+
+
 def _redirect_uri(request: Request) -> str:
     configured = str(get_effective("oidc_redirect_url") or "").strip()
     if configured:
@@ -302,17 +358,20 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
     except Exception as e:
         return HTMLResponse(f"<h1>Token exchange failed</h1><pre>{e}</pre>", status_code=502)
 
-    # Decode id_token without external dep — claims only; signature already from TLS+secret.
-    # (For higher assurance, validate via JWKS; future enhancement.)
+    # Validate the id_token signature against the IdP's JWKS (do NOT trust
+    # unverified claims — we make authz decisions on `groups`/`email`).
+    # Falls back to userinfo for any claims missing from a verified id_token.
     claims = {}
     if token.get("id_token"):
         try:
-            import base64, json
-            mid = token["id_token"].split(".")[1]
-            mid += "=" * (-len(mid) % 4)
-            claims = json.loads(base64.urlsafe_b64decode(mid).decode())
+            claims = await _verify_id_token(token["id_token"], meta, client_id)
         except Exception as e:
-            log.warning("id_token decode failed: %s", e)
+            log.warning("id_token validation failed: %s", e)
+            return HTMLResponse(
+                f"<h1>Authentication failed</h1><p>Could not validate the identity token: {e}</p>"
+                "<p><a href='/auth/login'>Try again</a></p>",
+                status_code=401,
+            )
 
     # userinfo as a fallback to fill missing claims
     if (not claims or "userinfo_endpoint" in meta) and token.get("access_token"):
