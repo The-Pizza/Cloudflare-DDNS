@@ -12,7 +12,7 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`example.witschger.net`) && PathPrefix(`/`)
+    - match: Host(`example.example.com`) && PathPrefix(`/`)
       kind: Rule
       services:
         - name: example-app

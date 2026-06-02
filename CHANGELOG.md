@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-06-02
+
+### Changed
+- **Default annotation key is now vendor-neutral**:
+  `cloudflare-ddns.io/dns-name` (was a deployment-specific internal
+  domain). This is the key the discovery loop looks up on
+  Services/Deployments/Ingresses.
+
+### Added
+- **Multi-key annotation discovery**. `ANNOTATION_KEY` now accepts a
+  comma-separated list of keys; a workload carrying ANY of them is
+  discovered. This makes migrating from an old annotation key to a new
+  one a non-breaking, two-step operation: list both keys, re-annotate
+  your workloads, then drop the old key.
+
+### Migration
+- Existing deployments that used the old annotation key keep working by
+  setting `ANNOTATION_KEY="cloudflare-ddns.io/dns-name,<your-old-key>"`,
+  re-annotating workloads with the new key, then removing the old key
+  from the list. New installs need no action.
+
 ## [0.6.0] - 2026-05-17
 
 ### Added
@@ -163,7 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Web UI** (Tailwind, no bundler) for browsing zones and toggling
   per-record auto-update.
 - **Annotation discovery** for any Service/Deployment/Ingress carrying
-  the `cloudflare-ddns.witschger.home/dns-name` annotation.
+  the `cloudflare-ddns.io/dns-name` annotation.
 - **Traefik IngressRoute + standard Ingress** host discovery.
 - **SQLite persistence** on a PVC: managed records and discovered hosts
   survive restarts and image upgrades.

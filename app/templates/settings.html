@@ -37,7 +37,7 @@ const FIELD_META = {
   poll_interval_seconds:  {label: 'Poll interval (s)',      type: 'number',   help: 'How often the engine checks for IP changes.', group: 'DDNS engine'},
   default_proxied:        {label: 'Default proxied',        type: 'bool',     help: 'New records added via UI default to this proxied state.', group: 'DDNS engine'},
   default_ttl:            {label: 'Default TTL',            type: 'number',   help: '1 = automatic (Cloudflare-managed).', group: 'DDNS engine'},
-  annotation_key:         {label: 'K8s annotation key',     type: 'text',     help: 'Workloads with this annotation get auto-discovered.', group: 'Discovery'},
+  annotation_key:         {label: 'K8s annotation key',     type: 'text',     help: 'Workloads with this annotation get auto-discovered. Comma-separate multiple keys to match any of them (useful when migrating keys).', group: 'Discovery'},
 
   auth_mode:              {label: 'Auth mode',              type: 'select',   options: ['none', 'oidc', 'forward-auth'],
                            help: 'none = open. oidc = built-in OpenID Connect login. forward-auth = trust reverse-proxy identity headers.',

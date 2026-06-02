@@ -1,15 +1,19 @@
 """Annotation-based discovery.
 
 Scans Services, Ingresses, Deployments for the configured annotation
-key (default `cloudflare-ddns.witschger.home/dns-name`) and records the
+key (default `cloudflare-ddns.io/dns-name`) and records the
 resulting hostnames as DiscoveredHost rows for the user to enable.
+
+`annotation_key` may be a comma-separated list of keys; a workload
+carrying ANY of them is discovered. This makes migrating from an old
+annotation key to a new one a non-breaking operation.
 """
 import logging
 import time
 
 from kubernetes import client, config
 
-from core.config import settings
+from core.config import annotation_keys
 from core.database import get_session
 from core.models import DiscoveredHost
 
@@ -52,10 +56,12 @@ class AnnotationWatcher:
         log.info("Annotation discovery: %s on %s/%s/%s", host, namespace, kind, name)
 
     def _walk(self, items, kind: str) -> None:
+        keys = annotation_keys()
         for it in items:
             md = it.metadata
             anns = md.annotations or {}
-            host = anns.get(settings.annotation_key)
+            # First matching key wins; supports migrating between keys.
+            host = next((anns[k] for k in keys if anns.get(k)), None)
             if host:
                 self._record(host, kind, md.namespace or "", md.name or "")
 

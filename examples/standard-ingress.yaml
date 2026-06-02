@@ -12,7 +12,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: example.witschger.net
+    - host: example.example.com
       http:
         paths:
           - path: /
