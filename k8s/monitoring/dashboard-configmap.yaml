@@ -1,0 +1,334 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dash-cloudflare-ddns
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  cloudflare-ddns.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "name": "IP changes",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "enable": true,
+            "iconColor": "orange",
+            "expr": "changes(ddns_ip_changes_total[2m]) > 0",
+            "titleFormat": "Public IP changed ({{family}})"
+          }
+        ]
+      },
+      "editable": true,
+      "graphTooltip": 1,
+      "schemaVersion": 39,
+      "tags": ["cloudflare-ddns", "dns", "networking"],
+      "title": "Cloudflare DDNS",
+      "uid": "cloudflare-ddns",
+      "time": { "from": "now-24h", "to": "now" },
+      "refresh": "30s",
+      "templating": { "list": [] },
+      "panels": [
+        {
+          "type": "row",
+          "title": "At a glance",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Current IPv4",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+          "options": {
+            "textMode": "name",
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "ddns_current_ip_info{family=\"ipv4\"}",
+              "legendFormat": "{{address}}",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Current IPv6",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+          "options": {
+            "textMode": "name",
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "noValue": "not configured"
+          },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "ddns_current_ip_info{family=\"ipv6\"}",
+              "legendFormat": "{{address}}",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Last engine run",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 10, "y": 1 },
+          "options": {
+            "textMode": "value",
+            "colorMode": "background",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 600 },
+                  { "color": "red", "value": 900 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "time() - ddns_last_run_timestamp_seconds",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Managed records",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 3, "x": 14, "y": 1 },
+          "options": {
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "area",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "fixed", "fixedColor": "text" } },
+            "overrides": []
+          },
+          "targets": [
+            { "refId": "A", "expr": "ddns_managed_records", "instant": true }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Enabled records",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 3, "x": 17, "y": 1 },
+          "options": {
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "area",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } },
+            "overrides": []
+          },
+          "targets": [
+            { "refId": "A", "expr": "ddns_enabled_records", "instant": true }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Discovered hosts",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+          "options": {
+            "textMode": "value",
+            "colorMode": "value",
+            "graphMode": "area",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } },
+            "overrides": []
+          },
+          "targets": [
+            { "refId": "A", "expr": "sum(ddns_discovered_hosts)", "instant": true }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Breakdown",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "piechart",
+          "title": "Discovered hosts by source",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 8, "x": 0, "y": 6 },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "values": ["value"] },
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "pieType": "donut"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "ddns_discovered_hosts",
+              "legendFormat": "{{source}}",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Up / scrape health",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 4, "x": 8, "y": 6 },
+          "options": {
+            "textMode": "value",
+            "colorMode": "background",
+            "graphMode": "none",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+            },
+            "overrides": []
+          },
+          "targets": [
+            { "refId": "A", "expr": "up{job=\"cloudflare-ddns\"}", "instant": true }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Records: managed vs enabled vs discovered",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 6 },
+          "fieldConfig": {
+            "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } },
+            "overrides": []
+          },
+          "targets": [
+            { "refId": "A", "expr": "ddns_managed_records", "legendFormat": "managed" },
+            { "refId": "B", "expr": "ddns_enabled_records", "legendFormat": "enabled" },
+            { "refId": "C", "expr": "sum(ddns_discovered_hosts)", "legendFormat": "discovered" }
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Activity & errors",
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Record updates / hr (by type)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 8, "x": 0, "y": 14 },
+          "fieldConfig": {
+            "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1 } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (record_type) (increase(ddns_record_updates_total[1h]))",
+              "legendFormat": "{{record_type}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Cloudflare API requests/sec (by outcome)",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 8, "x": 8, "y": 14 },
+          "fieldConfig": {
+            "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "error" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (outcome) (rate(ddns_cloudflare_api_requests_total[5m]))",
+              "legendFormat": "{{outcome}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Errors: update + IP-detect / hr",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 7, "w": 8, "x": 16, "y": 14 },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 },
+              "color": { "mode": "palette-classic" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (record_type) (increase(ddns_record_update_errors_total[1h]))",
+              "legendFormat": "update err {{record_type}}"
+            },
+            {
+              "refId": "B",
+              "expr": "sum by (family) (increase(ddns_ip_detect_failures_total[1h]))",
+              "legendFormat": "ip-detect fail {{family}}"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Public IP changes / hr",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "h": 6, "w": 24, "x": 0, "y": 21 },
+          "fieldConfig": {
+            "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1 } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (family) (increase(ddns_ip_changes_total[1h]))",
+              "legendFormat": "{{family}}"
+            }
+          ]
+        }
+      ]
+    }
