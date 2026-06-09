@@ -290,6 +290,13 @@ async def discovered():
                 "namespace": r.namespace,
                 "resource_name": r.resource_name,
                 "first_seen": r.first_seen.isoformat() if r.first_seen else None,
+                "managed": bool(getattr(r, "managed", False)),
+                "desired_type": getattr(r, "desired_type", "A"),
+                "desired_proxied": getattr(r, "desired_proxied", None),
+                "desired_ttl": getattr(r, "desired_ttl", None),
+                "desired_content": getattr(r, "desired_content", None),
+                "managed_record_id": getattr(r, "managed_record_id", None),
+                "last_reconcile_error": getattr(r, "last_reconcile_error", None),
             }
             for r in rows
         ]

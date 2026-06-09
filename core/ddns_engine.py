@@ -16,10 +16,22 @@ import httpx
 from core.cloudflare_client import CloudflareClient
 from core.config import settings
 from core.database import get_session
-from core.models import IpHistoryEntry, ManagedRecord
+from core.models import DiscoveredHost, IpHistoryEntry, ManagedRecord
 from core import metrics
 
 log = logging.getLogger("cfddns.engine")
+
+
+def _is_tunnel_cname(cf_rec: dict) -> bool:
+    """True if a Cloudflare record is a cloudflared-managed tunnel CNAME.
+
+    These are owned by cloudflared (CNAME -> <id>.cfargotunnel.com) and must
+    never be adopted or mutated by the DDNS engine.
+    """
+    return (
+        cf_rec.get("type") == "CNAME"
+        and (cf_rec.get("content") or "").lower().rstrip(".").endswith(".cfargotunnel.com")
+    )
 
 
 class DDNSEngine:
@@ -152,6 +164,158 @@ class DDNSEngine:
         finally:
             sess.close()
 
+    async def reconcile_annotation_managed(self, ipv4: Optional[str], ipv6: Optional[str]) -> None:
+        """Promote declaratively-managed DiscoveredHosts into ManagedRecords.
+
+        For every DiscoveredHost with `managed=True` that hasn't been reconciled
+        yet (no `managed_record_id`), find its zone, then either ADOPT an existing
+        Cloudflare record of the right name+type or CREATE a new one. The standard
+        DDNS loop then keeps it pointed at the public IP.
+
+        This is the engine half of Option B (declarative annotation management).
+        It is intentionally conservative:
+          - never touches cloudflared tunnel CNAMEs,
+          - skips a host when the address family it needs isn't available yet,
+          - records per-host errors on the DiscoveredHost rather than aborting.
+        """
+        if not settings.enable_annotation_management:
+            return
+
+        sess = get_session()
+        try:
+            pending = list(
+                sess.query(DiscoveredHost)
+                .filter(DiscoveredHost.managed == True,                # noqa: E712
+                        DiscoveredHost.managed_record_id == None)       # noqa: E711
+                .all()
+            )
+        finally:
+            sess.close()
+        if not pending:
+            return
+
+        # Resolve zones once for the batch.
+        try:
+            zones = await self.cf.list_zones()
+        except Exception as e:
+            log.warning("annotation-manage: could not list zones: %s", e)
+            return
+        # Longest-suffix match so a host in a subdomain lands in the right zone.
+        zones_sorted = sorted(zones, key=lambda z: len(z["name"]), reverse=True)
+        zone_records_cache: dict = {}
+
+        for host in pending:
+            fqdn = host.host.strip().rstrip(".")
+            rtype = (host.desired_type or "A").upper()
+            target_ip = self._ip_for_type(rtype, ipv4, ipv6)
+            if not target_ip and not host.desired_content:
+                # Need the public IP for this family but it's not available yet.
+                log.debug("annotation-manage: %s (%s) deferred -- no %s address yet",
+                          fqdn, rtype, rtype)
+                continue
+            content = host.desired_content or target_ip
+            if not content:
+                # Defensive: guarded above, but keep the type contract explicit.
+                continue
+            zone = next(
+                (z for z in zones_sorted
+                 if fqdn == z["name"] or fqdn.endswith("." + z["name"])),
+                None,
+            )
+            if not zone:
+                self._set_reconcile_error(host.id, f"no Cloudflare zone owns {fqdn}")
+                log.warning("annotation-manage: no zone for %s", fqdn)
+                continue
+            zid = zone["id"]
+            proxied = host.desired_proxied if host.desired_proxied is not None else settings.default_proxied
+            ttl = host.desired_ttl if host.desired_ttl is not None else settings.default_ttl
+
+            try:
+                if zid not in zone_records_cache:
+                    zone_records_cache[zid] = await self.cf.list_dns_records(zid)
+                existing = next(
+                    (r for r in zone_records_cache[zid]
+                     if r.get("name") == fqdn and r.get("type") == rtype),
+                    None,
+                )
+                # Guard: never adopt/clobber a cloudflared tunnel CNAME for this host.
+                tunnel = next(
+                    (r for r in zone_records_cache[zid]
+                     if r.get("name") == fqdn and _is_tunnel_cname(r)),
+                    None,
+                )
+                if tunnel:
+                    self._set_reconcile_error(
+                        host.id, f"{fqdn} is a cloudflared tunnel CNAME; refusing to manage")
+                    log.warning("annotation-manage: %s is a tunnel CNAME -- skipping", fqdn)
+                    continue
+
+                if existing:
+                    record_id = existing["id"]
+                    log.info("annotation-manage: adopting existing %s (%s) %s", fqdn, rtype, record_id)
+                else:
+                    created = await self.cf.create_dns_record(
+                        zone_id=zid, name=fqdn, ip=content,
+                        record_type=rtype, proxied=proxied, ttl=ttl,
+                    )
+                    rec = created.get("result", created)
+                    record_id = rec["id"]
+                    log.info("annotation-manage: created %s (%s) -> %s proxied=%s",
+                             fqdn, rtype, content, proxied)
+
+                self._promote_to_managed_record(
+                    host_id=host.id, zone_id=zid, zone_name=zone["name"],
+                    record_id=record_id, record_name=fqdn, record_type=rtype,
+                    proxied=proxied, ttl=ttl,
+                )
+                metrics.RECORD_UPDATES.labels(record_type=rtype).inc()
+            except Exception as e:
+                self._set_reconcile_error(host.id, str(e))
+                log.warning("annotation-manage: failed reconciling %s: %s", fqdn, e)
+
+    def _set_reconcile_error(self, host_id: Optional[int], msg: str) -> None:
+        if host_id is None:
+            return
+        s = get_session()
+        try:
+            h = s.get(DiscoveredHost, host_id)
+            if h:
+                h.last_reconcile_error = msg[:500]
+                s.commit()
+        finally:
+            s.close()
+
+    def _promote_to_managed_record(
+        self, *, host_id: Optional[int], zone_id: str, zone_name: str,
+        record_id: str, record_name: str, record_type: str,
+        proxied: bool, ttl: int,
+    ) -> None:
+        """Create the ManagedRecord (idempotently) and stamp the DiscoveredHost."""
+        s = get_session()
+        try:
+            existing = (
+                s.query(ManagedRecord)
+                .filter(ManagedRecord.record_id == record_id)
+                .first()
+            )
+            if not existing:
+                s.add(
+                    ManagedRecord(
+                        zone_id=zone_id, zone_name=zone_name,
+                        record_id=record_id, record_name=record_name,
+                        record_type=record_type, enabled=True,
+                        proxied=bool(proxied), ttl=int(ttl),
+                        source="annotation",
+                    )
+                )
+            h = s.get(DiscoveredHost, host_id) if host_id is not None else None
+            if h:
+                h.managed_record_id = record_id
+                h.last_reconcile_error = None
+            s.commit()
+        finally:
+            s.close()
+
     async def run_once(self) -> None:
         ipv4 = await self.get_current_ip()
         ipv6 = await self.get_current_ipv6()
@@ -172,6 +336,14 @@ class DDNSEngine:
             metrics.IP_CHANGES.labels(family="ipv6").inc()
         if ipv6:
             metrics.set_current_ip("ipv6", ipv6)
+
+        # Promote any declaratively-managed annotation hosts into ManagedRecords
+        # BEFORE the sync loop, so a freshly-discovered host is created/adopted
+        # and then immediately pointed at the public IP in the same pass.
+        try:
+            await self.reconcile_annotation_managed(ipv4, ipv6)
+        except Exception as e:
+            log.warning("annotation-manage reconcile pass failed: %s", e)
 
         sess = get_session()
         try:

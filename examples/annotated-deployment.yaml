@@ -1,11 +1,29 @@
-# Example: Annotation-driven discovery
+# Example: Annotation-driven discovery & declarative management
 #
-# Adding the `cloudflare-ddns.io/dns-name` annotation
-# to ANY Service, Deployment, or Ingress causes that hostname to
-# appear in the "Discovered" tab of the Cloudflare DDNS UI.
+# TWO modes, controlled by annotations:
 #
-# This example annotates an nginx Deployment.
+# 1) DISCOVER-ONLY (default): add the `cloudflare-ddns.io/dns-name` annotation
+#    to ANY Service, Deployment, or Ingress and that hostname appears in the
+#    "Discovered" tab of the Cloudflare DDNS UI for you to enable with a click.
+#
+# 2) DECLARATIVE MANAGEMENT (Option B): additionally set
+#    `cloudflare-ddns.io/manage: "true"` and the controller AUTO-CREATES (or
+#    adopts) the Cloudflare record and keeps it pointed at your public IP — no
+#    UI click, fully GitOps. Tune the record with the sibling annotations.
+#
+# Sibling management annotations (same `cloudflare-ddns.io/` prefix as dns-name):
+#   cloudflare-ddns.io/manage    "true"|"false"  opt into declarative management
+#   cloudflare-ddns.io/proxied   "true"|"false"  Cloudflare orange (proxied) vs grey (DNS-only)
+#   cloudflare-ddns.io/type      "A"|"AAAA"        record type (default A)
+#   cloudflare-ddns.io/ttl       integer           TTL, 1 = Cloudflare automatic
+#   cloudflare-ddns.io/content   string            explicit content (default: track public IP)
+#
+# NOTE: the controller NEVER touches a cloudflared tunnel CNAME
+# (<id>.cfargotunnel.com). Hostnames fronted by a Cloudflare Tunnel are managed
+# by cloudflared itself — leave those un-annotated (or discover-only).
 
+---
+# Discover-only example (mode 1)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,3 +46,27 @@ spec:
           image: nginx:alpine
           ports:
             - containerPort: 80
+
+---
+# Declarative grey-cloud management example (mode 2)
+# This is exactly the OpenZiti pattern: a DNS-only A record that tracks the
+# public IP, so a zero-trust fabric endpoint survives mutual-TLS (which a
+# Cloudflare-proxied/orange record would break).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ziti-edge-router
+  namespace: ziti
+  annotations:
+    cloudflare-ddns.io/dns-name: "router.ziti.witschger.net"
+    cloudflare-ddns.io/manage: "true"
+    cloudflare-ddns.io/proxied: "false"   # grey-cloud — required for Ziti mTLS
+    cloudflare-ddns.io/type: "A"
+    cloudflare-ddns.io/ttl: "1"
+spec:
+  selector:
+    app: ziti-router
+  ports:
+    - name: edge
+      port: 443
+      targetPort: 3022

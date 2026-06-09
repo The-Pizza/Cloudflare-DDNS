@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Cloudflare DDNS",
     description="Modern self-hosted Cloudflare DDNS with Web UI and K8s discovery",
-    version="0.8.0",
+    version="0.9.0",
     lifespan=lifespan,
 )
 
