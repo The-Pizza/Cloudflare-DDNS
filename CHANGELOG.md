@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-06-09
+
+### Added
+- **Declarative annotation management (GitOps).** A workload carrying
+  `cloudflare-ddns.io/manage: "true"` (alongside the existing
+  `cloudflare-ddns.io/dns-name`) now has its Cloudflare record
+  **auto-created or adopted** and kept pointed at the public IP — no UI
+  click. Tune the record with sibling annotations that reuse the dns-name
+  key's prefix:
+  - `cloudflare-ddns.io/proxied` — `"true"`/`"false"` (orange vs grey cloud)
+  - `cloudflare-ddns.io/type` — `A` (default) or `AAAA`
+  - `cloudflare-ddns.io/ttl` — integer, `1` = Cloudflare automatic
+  - `cloudflare-ddns.io/content` — explicit content (default: track public IP)
+- `ENABLE_ANNOTATION_MANAGEMENT` env/setting (default **true**) as a global
+  kill-switch; the per-workload `manage` annotation still gates each host.
+- The reconcile pass **never adopts or mutates a cloudflared tunnel CNAME**
+  (`<id>.cfargotunnel.com`), so tunnel-fronted hostnames stay owned by
+  cloudflared. Per-host reconcile errors are recorded on the discovered host
+  and surfaced via `GET /api/discovered`, never crashing the loop.
+- Additive SQLite column migration (`ALTER TABLE ... ADD COLUMN`) so existing
+  instances gain the new `discoveredhost` columns on upgrade without a manual
+  migration or data loss.
+- 23 new unit tests covering management-key derivation, tri-state annotation
+  parsing, and the reconcile create/adopt/tunnel-guard/zone-resolution paths
+  (suite now 52 tests on Python 3.12 + 3.13).
+
+### Changed
+- `GET /api/discovered` now returns the declarative-management fields
+  (`managed`, `desired_type`, `desired_proxied`, `desired_ttl`,
+  `desired_content`, `managed_record_id`, `last_reconcile_error`).
+- Dependency bumps (via Dependabot): fastapi 0.136.1→0.136.3,
+  sqlmodel 0.0.22→0.0.38, authlib 1.3.2→1.7.2, uvicorn 0.47.0→0.48.0,
+  jinja2 3.1.5→3.1.6, base image python 3.13-slim→3.13.13-slim,
+  actions/setup-python 5→6, docker/build-push-action 6→7.
+
 ## [0.8.0] - 2026-06-02
 
 ### Added

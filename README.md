@@ -19,6 +19,12 @@ Kubernetes-aware discovery so you can stop hand-editing `records.json`.
 * **🏷️ Annotation discovery** — Tag any `Service`, `Deployment`, or
   `Ingress` with `cloudflare-ddns.io/dns-name: foo.example.com`
   and it shows up in the **Discovered** tab.
+* **📿 Declarative management (GitOps)** — Add
+  `cloudflare-ddns.io/manage: "true"` (plus optional `proxied`, `type`,
+  `ttl`, `content` siblings) and the controller **auto-creates/adopts** the
+  Cloudflare record and keeps it on your public IP — no UI click. Never
+  touches cloudflared tunnel CNAMEs. See
+  [`examples/annotated-deployment.yaml`](examples/annotated-deployment.yaml).
 * **🛣️ Traefik & Ingress discovery** — Host rules from Traefik
   `IngressRoute` CRDs and standard `networking.k8s.io/v1` Ingresses are
   also auto-discovered.
@@ -96,7 +102,8 @@ for local dev.
 | `IMPORT_LEGACY_CONFIG` | `true` | Set `false` to skip legacy import. |
 | `ENABLE_ANNOTATION_DISCOVERY` | `true` | Scan K8s objects for `ANNOTATION_KEY`. |
 | `ENABLE_TRAEFIK_DISCOVERY` | `true` | Scan Traefik + standard Ingress. |
-| `ANNOTATION_KEY` | `cloudflare-ddns.io/dns-name` | Annotation looked up by the discovery loop. Accepts a comma-separated list to match multiple keys (e.g. during migration). |
+| `ANNOTATION_KEY` | `cloudflare-ddns.io/dns-name` | Annotation looked up by the discovery loop. Accepts a comma-separated list to match multiple keys (e.g. during migration). The management siblings (`/manage`, `/proxied`, `/type`, `/ttl`, `/content`) reuse this key's prefix. |
+| `ENABLE_ANNOTATION_MANAGEMENT` | `true` | Global switch for declarative management. When on, a workload carrying `<prefix>/manage: "true"` has its Cloudflare record auto-created/adopted and kept in sync — no UI click. Per-workload `manage` still gates each host. |
 | `LOG_LEVEL` | `INFO` | Standard Python log level. |
 
 ## 🧪 Local development

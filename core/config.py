@@ -40,6 +40,19 @@ class Settings(BaseSettings):
     # then drop the old key. The default is a vendor-neutral domain-style key.
     annotation_key: str = "cloudflare-ddns.io/dns-name"
 
+    # ---- Declarative management (Option B) ----
+    # When True, a workload that carries BOTH the dns-name annotation AND the
+    # management annotation (`<prefix>/manage: "true"`) is auto-created and kept
+    # in sync with the public IP -- no UI click. The sibling annotations read
+    # from the SAME prefix as `annotation_key`:
+    #   <prefix>/manage    "true"|"false"   opt into declarative management
+    #   <prefix>/proxied   "true"|"false"   Cloudflare orange/grey cloud
+    #   <prefix>/type      "A"|"AAAA"        record type (default A)
+    #   <prefix>/ttl       integer           TTL (1 = CF automatic)
+    #   <prefix>/content   string            explicit content (default: track public IP)
+    # A global kill-switch; the per-workload `manage` annotation still gates each host.
+    enable_annotation_management: bool = True
+
     # ---- Legacy: read static records.json on startup, import into DB once ----
     config_path: str = "/etc/config/records.json"
     import_legacy_config: bool = True
@@ -102,6 +115,34 @@ def annotation_keys() -> list[str]:
     """
     raw = get_effective("annotation_key")
     return [k.strip() for k in str(raw).split(",") if k.strip()]
+
+
+def _key_prefix(key: str) -> str:
+    """Return the namespace/prefix portion of an annotation key.
+
+    For `cloudflare-ddns.io/dns-name` the prefix is `cloudflare-ddns.io`.
+    Sibling management keys (`manage`, `proxied`, `type`, `ttl`, `content`)
+    are derived by swapping the suffix while keeping this prefix, so a repo
+    that customised `annotation_key` to its own domain gets matching
+    management keys for free.
+    """
+    return key.rsplit("/", 1)[0] if "/" in key else key
+
+
+def management_keys(suffix: str) -> list[str]:
+    """Return the sibling management annotation key(s) for a given suffix.
+
+    Mirrors `annotation_keys()` multi-key behaviour: for every configured
+    dns-name key we derive `<prefix>/<suffix>`, de-duplicated and order-stable.
+    Example: suffix="proxied" with the default key yields
+    `["cloudflare-ddns.io/proxied"]`.
+    """
+    out: list[str] = []
+    for k in annotation_keys():
+        candidate = f"{_key_prefix(k)}/{suffix}"
+        if candidate not in out:
+            out.append(candidate)
+    return out
 
 # Keys exposed/editable on the Settings page. Anything in env wins.
 RUNTIME_SETTINGS_KEYS = (
