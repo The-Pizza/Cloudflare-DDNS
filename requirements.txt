@@ -2,7 +2,7 @@ fastapi==0.136.1
 uvicorn[standard]==0.48.0
 httpx==0.28.1
 pydantic-settings==2.14.1
-jinja2==3.1.5
+jinja2==3.1.6
 python-multipart==0.0.20
 kubernetes==35.0.0
 sqlmodel==0.0.22
