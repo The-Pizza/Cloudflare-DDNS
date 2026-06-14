@@ -3,7 +3,7 @@
 # SQLModel's metaclass: "Field 'id' requires a type annotation"). The image
 # still builds on 3.14 but crashes at runtime. Revisit when SQLModel ships
 # 3.14 support. See CHANGELOG 0.7.1.
-FROM python:3.13.13-slim
+FROM python:3.13.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
